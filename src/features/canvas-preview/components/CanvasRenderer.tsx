@@ -101,7 +101,7 @@ const CanvasRendererComponent: React.FC<CanvasRendererProps> = ({ baseWidth, bas
     }
   }, [playhead, clips, tracks, isPlaying]);
 
-  // Handle playback state
+  // Handle playback state - ONLY depends on isPlaying, not playhead
   useEffect(() => {
     // Set FrameExtractor playback mode for performance optimization
     frameExtractorRef.current?.setPlaybackMode(isPlaying);
@@ -113,7 +113,9 @@ const CanvasRendererComponent: React.FC<CanvasRendererProps> = ({ baseWidth, bas
       stopAudioPlayback();
       stopVideoPlayback();
       // When pausing, render the exact frame via FFmpeg for accuracy
-      renderFrame(playhead);
+      // Use current playhead value (from ref or store)
+      const currentPlayhead = useTimelineStore.getState().playhead;
+      renderFrame(currentPlayhead);
     }
 
     return () => {
@@ -121,7 +123,8 @@ const CanvasRendererComponent: React.FC<CanvasRendererProps> = ({ baseWidth, bas
       stopAudioPlayback();
       stopVideoPlayback();
     };
-  }, [isPlaying, playhead]);
+    // IMPORTANT: Do NOT add playhead to dependencies - causes stop/start loop
+  }, [isPlaying]);
 
   /**
    * Setup audio element for a clip
