@@ -309,13 +309,17 @@ pub enum Priority {
     Normal = 2,
 }
 
-/// A cached thumbnail frame
+/// A cached thumbnail frame with weighted eviction metadata
 #[derive(Debug)]
 pub struct CachedFrame {
     pub time: f64,
     pub path: PathBuf,
     pub timestamp: Instant,
     pub access_count: AtomicU64,
+    /// Last time this frame was accessed (for recency calculation)
+    pub last_access: RwLock<Instant>,
+    /// Whether this frame is currently in the viewport
+    pub in_viewport: RwLock<bool>,
 }
 
 impl CachedFrame {
@@ -325,11 +329,87 @@ impl CachedFrame {
             path,
             timestamp: Instant::now(),
             access_count: AtomicU64::new(1),
+            last_access: RwLock::new(Instant::now()),
+            in_viewport: RwLock::new(false),
         }
     }
 
     pub fn touch(&self) {
         self.access_count.fetch_add(1, Ordering::Relaxed);
+        // Use try_write to avoid blocking - if we can't get the lock, skip updating last_access
+        if let Ok(mut last) = self.last_access.try_write() {
+            *last = Instant::now();
+        }
+    }
+
+    /// Mark frame as in viewport (should be protected from eviction)
+    pub async fn set_in_viewport(&self, visible: bool) {
+        let mut in_vp = self.in_viewport.write().await;
+        *in_vp = visible;
+    }
+
+    /// Calculate weighted eviction score (lower = more likely to evict)
+    /// 
+    /// Score formula:
+    /// score = viewport_priority * 10 + recency_weight * 5 + access_frequency * 3 + density_weight * 2
+    /// 
+    /// Where:
+    /// - viewport_priority: 10 if in viewport, 0 otherwise (almost never evict visible frames)
+    /// - recency_weight: 0-10 based on time since last access (0 = old, 10 = recent)
+    /// - access_frequency: 0-10 based on access count (0 = rarely used, 10 = frequently used)
+    /// - density_weight: 0-10 based on density level (Low=10, Medium=7, High=4, Ultra=0)
+    /// 
+    /// This ensures:
+    /// - Visible viewport frames are almost never evicted (score >= 100)
+    /// - Recently accessed frames are protected
+    /// - Frequently accessed frames (looping playback, repeated scrub zones) are protected
+    /// - Lower density frames are preferred for retention (they're cheaper to regenerate)
+    pub async fn eviction_score(&self, density: DensityLevel) -> u64 {
+        // Viewport priority: 10 if visible, 0 otherwise
+        let viewport_priority = if *self.in_viewport.read().await { 10 } else { 0 };
+
+        // Recency weight: 0-10 based on time since last access
+        let last_access_time = *self.last_access.read().await;
+        let seconds_since_access = Instant::now().duration_since(last_access_time).as_secs();
+        let recency_weight = if seconds_since_access < 5 {
+            10 // Very recent (< 5s)
+        } else if seconds_since_access < 30 {
+            7 // Recent (< 30s)
+        } else if seconds_since_access < 120 {
+            4 // Somewhat recent (< 2min)
+        } else if seconds_since_access < 600 {
+            2 // Old (< 10min)
+        } else {
+            0 // Very old (> 10min)
+        };
+
+        // Access frequency weight: 0-10 based on access count
+        let access_count = self.access_count.load(Ordering::Relaxed);
+        let access_frequency = if access_count >= 50 {
+            10 // Very frequently accessed (looping playback)
+        } else if access_count >= 20 {
+            7 // Frequently accessed
+        } else if access_count >= 10 {
+            5 // Moderately accessed
+        } else if access_count >= 5 {
+            3 // Occasionally accessed
+        } else {
+            0 // Rarely accessed
+        };
+
+        // Density weight: Lower density = higher weight (cheaper to regenerate)
+        // Low density frames are preferred for retention because they're faster to extract
+        let density_weight = match density {
+            DensityLevel::Low => 10,    // Keep low density (5s interval, fast to extract)
+            DensityLevel::Medium => 7,  // Keep medium density (1s interval)
+            DensityLevel::High => 4,    // Evict high density first (0.2s interval, expensive)
+            DensityLevel::Ultra => 0,   // Evict ultra density first (0.02s interval, very expensive)
+        };
+
+        // Calculate weighted score
+        let score = viewport_priority * 10 + recency_weight * 5 + access_frequency * 3 + density_weight * 2;
+        
+        score
     }
 }
 
@@ -374,41 +454,55 @@ impl DensityCache {
     }
 
     /// Insert frame into cache
-    pub fn insert(&self, time: f64, frame: CachedFrame) {
+    pub async fn insert(&self, time: f64, frame: CachedFrame) {
         let key = Self::time_key(time);
         self.frames.insert(key, frame);
-        self.evict_if_needed();
+        self.evict_if_needed().await;
     }
 
     /// Evict oldest frames if cache exceeds max size
-    fn evict_if_needed(&self) {
+    /// Uses weighted eviction scoring to protect viewport frames and frequently accessed frames
+    async fn evict_if_needed(&self) {
         if self.frames.len() > self.max_size {
-            // Collect entries sorted by timestamp (oldest first)
-            let mut entries: Vec<_> = self
-                .frames
-                .iter()
-                .map(|e| (*e.key(), e.timestamp, e.access_count.load(Ordering::Relaxed)))
-                .collect();
+            // Collect entries with their eviction scores
+            let mut scored_entries: Vec<(u64, u64)> = Vec::new();
+            
+            for entry in self.frames.iter() {
+                let time_key = *entry.key();
+                let frame = entry.value();
+                let score = frame.eviction_score(self.density).await;
+                scored_entries.push((time_key, score));
+            }
 
-            // Sort by: access_count (ascending), then timestamp (oldest first)
-            entries.sort_by(|a, b| {
-                let access_cmp = a.2.cmp(&b.2);
-                if access_cmp == std::cmp::Ordering::Equal {
-                    a.1.cmp(&b.1)
-                } else {
-                    access_cmp
-                }
-            });
+            // Sort by eviction score (ascending) - lowest scores are evicted first
+            scored_entries.sort_by_key(|(_, score)| *score);
 
-            // Remove oldest 20%
+            // Remove lowest-scoring 20%
             let to_remove = (self.max_size / 5).max(1);
-            for (key, _, _) in entries.into_iter().take(to_remove) {
+            let mut removed = 0;
+            let mut viewport_protected = 0;
+
+            for (key, score) in scored_entries.into_iter().take(to_remove) {
+                // Extra protection: never evict frames with score >= 100 (in viewport)
+                if score >= 100 {
+                    viewport_protected += 1;
+                    continue;
+                }
+
                 if let Some((_, frame)) = self.frames.remove(&key) {
                     // Decrement global total_size by the file size of the removed frame
                     if let Ok(metadata) = std::fs::metadata(&frame.path) {
                         GLOBAL_CACHE.total_size.fetch_sub(metadata.len(), Ordering::Relaxed);
                     }
+                    removed += 1;
                 }
+            }
+
+            if removed > 0 || viewport_protected > 0 {
+                eprintln!(
+                    "[DensityCache] Evicted {} frames (protected {} viewport frames) from {} density cache",
+                    removed, viewport_protected, self.density.label()
+                );
             }
         }
     }
@@ -560,13 +654,18 @@ impl ThumbnailCache {
 
     /// Evict frames when total cache size exceeds 200MB.
     ///
-    /// Eviction strategy (Property 12 & 13):
+    /// Weighted eviction strategy:
     /// 1. Check if total_size exceeds 200MB limit
-    /// 2. Collect all frames across all videos, grouped by density priority:
-    ///    - High-priority eviction: Ultra and High density frames
-    ///    - Low-priority eviction: Medium and Low density frames
-    /// 3. Within each group, sort by access_count (ascending) then timestamp (oldest first)
-    /// 4. Remove the oldest 20% of total frames, preferring Ultra/High first
+    /// 2. Calculate weighted eviction score for each frame:
+    ///    score = viewport_priority * 10 + recency_weight * 5 + access_frequency * 3 + density_weight * 2
+    /// 3. Sort by score (ascending) - lowest scores are evicted first
+    /// 4. Remove the lowest-scoring 20% of frames
+    /// 
+    /// This ensures:
+    /// - Visible viewport frames are almost never evicted (score >= 100)
+    /// - Recently accessed frames are protected (looping playback, repeated scrub zones)
+    /// - Frequently accessed frames are protected
+    /// - Ultra/High density frames are evicted before Low/Medium (cheaper to regenerate)
     pub async fn evict_if_needed(&self) {
         const CACHE_SIZE_LIMIT: u64 = 200 * 1024 * 1024; // 200MB
 
@@ -576,15 +675,13 @@ impl ThumbnailCache {
         }
 
         eprintln!(
-            "[ThumbnailCache] Cache size {}MB exceeds 200MB limit, evicting...",
+            "[ThumbnailCache] Cache size {}MB exceeds 200MB limit, evicting with weighted scoring...",
             current_size / (1024 * 1024)
         );
 
-        // Collect all frames across all videos and density levels.
-        // Each entry: (video_id, density, time_key, access_count, timestamp, file_path)
-        // We separate into high-priority eviction (Ultra/High) and low-priority (Medium/Low).
-        let mut high_priority: Vec<(String, DensityLevel, u64, u64, Instant, PathBuf)> = Vec::new();
-        let mut low_priority: Vec<(String, DensityLevel, u64, u64, Instant, PathBuf)> = Vec::new();
+        // Collect all frames with their eviction scores
+        // Each entry: (video_id, density, time_key, eviction_score, file_path)
+        let mut scored_frames: Vec<(String, DensityLevel, u64, u64, PathBuf)> = Vec::new();
 
         for video_entry in self.videos.iter() {
             let video_cache = video_entry.value();
@@ -594,55 +691,50 @@ impl ThumbnailCache {
                 for frame_entry in density_cache.frames.iter() {
                     let time_key = *frame_entry.key();
                     let frame = frame_entry.value();
-                    let access_count = frame.access_count.load(Ordering::Relaxed);
-                    let timestamp = frame.timestamp;
                     let path = frame.path.clone();
                     let vid_id = video_cache.video_id.clone();
 
-                    match density {
-                        DensityLevel::Ultra | DensityLevel::High => {
-                            high_priority.push((vid_id, density, time_key, access_count, timestamp, path));
-                        }
-                        DensityLevel::Medium | DensityLevel::Low => {
-                            low_priority.push((vid_id, density, time_key, access_count, timestamp, path));
-                        }
-                    }
+                    // Calculate weighted eviction score
+                    let score = frame.eviction_score(density).await;
+
+                    scored_frames.push((vid_id, density, time_key, score, path));
                 }
             }
         }
 
-        // Sort each group: access_count ascending (LRU first), then timestamp oldest first
-        let sort_fn = |a: &(String, DensityLevel, u64, u64, Instant, PathBuf),
-                       b: &(String, DensityLevel, u64, u64, Instant, PathBuf)| {
-            let access_cmp = a.3.cmp(&b.3);
-            if access_cmp == std::cmp::Ordering::Equal {
-                a.4.cmp(&b.4)
-            } else {
-                access_cmp
-            }
-        };
-        high_priority.sort_by(sort_fn);
-        low_priority.sort_by(sort_fn);
+        // Sort by eviction score (ascending) - lowest scores are evicted first
+        scored_frames.sort_by_key(|(_, _, _, score, _)| *score);
 
-        // Calculate total frames and how many to remove (20%)
-        let total_frames = high_priority.len() + low_priority.len();
+        // Calculate how many frames to remove (20%)
+        let total_frames = scored_frames.len();
         let to_remove = ((total_frames / 5).max(1)).min(total_frames);
 
         eprintln!(
-            "[ThumbnailCache] Evicting {} of {} frames (Ultra/High: {}, Medium/Low: {})",
+            "[ThumbnailCache] Evicting {} of {} frames using weighted scoring",
             to_remove,
-            total_frames,
-            high_priority.len(),
-            low_priority.len()
+            total_frames
         );
 
-        // Evict from high-priority (Ultra/High) first, then low-priority (Medium/Low)
-        let mut removed = 0;
-        let eviction_list = high_priority.into_iter().chain(low_priority.into_iter());
+        // Log score distribution for debugging
+        if !scored_frames.is_empty() {
+            let lowest_score = scored_frames.first().map(|(_, _, _, s, _)| *s).unwrap_or(0);
+            let highest_score = scored_frames.last().map(|(_, _, _, s, _)| *s).unwrap_or(0);
+            let median_score = scored_frames.get(total_frames / 2).map(|(_, _, _, s, _)| *s).unwrap_or(0);
+            eprintln!(
+                "[ThumbnailCache] Score distribution: lowest={}, median={}, highest={}",
+                lowest_score, median_score, highest_score
+            );
+        }
 
-        for (vid_id, density, time_key, _, _, file_path) in eviction_list {
-            if removed >= to_remove {
-                break;
+        // Evict lowest-scoring frames
+        let mut removed = 0;
+        let mut viewport_protected = 0;
+
+        for (vid_id, density, time_key, score, file_path) in scored_frames.into_iter().take(to_remove) {
+            // Extra protection: never evict frames with score >= 100 (in viewport)
+            if score >= 100 {
+                viewport_protected += 1;
+                continue;
             }
 
             // Remove from the in-memory cache
@@ -660,8 +752,9 @@ impl ThumbnailCache {
         }
 
         eprintln!(
-            "[ThumbnailCache] Eviction complete: removed {} frames, new size ~{}MB",
+            "[ThumbnailCache] Eviction complete: removed {} frames, protected {} viewport frames, new size ~{}MB",
             removed,
+            viewport_protected,
             self.total_size.load(Ordering::Relaxed) / (1024 * 1024)
         );
     }
