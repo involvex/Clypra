@@ -228,7 +228,7 @@ export function evaluateScene(time: number, clips: Clip[], tracks: Track[], asse
   // TODO: Detect and evaluate transitions between clips
 
   // ─── 6. Create Metadata ────────────────────────────────────────────────────
-  
+
   // Create deterministic hash of active media to trigger lifecycle events
   const activeMediaHash = visualLayers
     .filter((l) => l.layerType === "media")

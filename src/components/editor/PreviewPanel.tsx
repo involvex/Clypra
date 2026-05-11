@@ -223,13 +223,39 @@ const ProgramPreview: React.FC = () => {
       setDimensions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight });
     };
 
-    const resizeObserver = new ResizeObserver(() => updateDimensions());
+    const resizeObserver = new ResizeObserver(() => {
+      updateDimensions();
+      // Force canvas to re-render current frame after resize
+      // The canvas rendering effect will restart due to displayWidth/displayHeight changes
+    });
+
+    // Also listen to window resize and fullscreen events for more reliable updates
+    const handleResize = () => {
+      updateDimensions();
+    };
+
+    const handleFullscreenChange = () => {
+      // Delay to ensure layout has settled after fullscreen transition
+      setTimeout(updateDimensions, 100);
+      // Additional update after animation completes
+      setTimeout(updateDimensions, 300);
+    };
+
     if (containerRef.current) {
       resizeObserver.observe(containerRef.current);
       setTimeout(updateDimensions, 0);
     }
 
-    return () => resizeObserver.disconnect();
+    window.addEventListener("resize", handleResize);
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange); // Safari
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", handleResize);
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
+    };
   }, [project]);
 
   // Scene evaluation (for UI and initial render)
@@ -259,6 +285,12 @@ const ProgramPreview: React.FC = () => {
     const canvas = canvasRef.current;
 
     if (displayWidth === 0 || displayHeight === 0) return;
+
+    // Clear canvas immediately when dimensions change to avoid showing stretched content
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.clearRect(0, 0, displayWidth, displayHeight);
+    }
 
     // Get scheduler and update timeline state
     const scheduler = getFrameScheduler();

@@ -13,24 +13,13 @@ const ExportDialog = lazy(() => import("../ui/ExportDialog").then((m) => ({ defa
 
 export const TopBar: React.FC = () => {
   const { currentTime, duration, formatTime } = usePlayback();
-  const { project, updateProject, closeProject, mediaAssets, scheduleAutoSave } = useProjectStore();
+  const { project, closeProject, mediaAssets, scheduleAutoSave } = useProjectStore();
   const { toggleSettingsModal } = useUIStore();
   const { clips, tracks, epoch } = useTimelineStore();
   const { state: historyState } = useHistoryStore();
-  const [isEditingName, setIsEditingName] = useState(false);
-  const [projectName, setProjectName] = useState(project?.name || "");
   const [isExportingFrame, setIsExportingFrame] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
-
-  const handleNameBlur = () => {
-    if (projectName.trim() && projectName !== project?.name) {
-      updateProject({ name: projectName });
-    } else {
-      setProjectName(project?.name || "");
-    }
-    setIsEditingName(false);
-  };
 
   const handleExportFrame = async () => {
     if (!project) return;
@@ -68,13 +57,7 @@ export const TopBar: React.FC = () => {
         </Button>
         <div className="w-px h-6 bg-border" />
         <Film className="w-5 h-5 text-accent-soft" />
-        {isEditingName ? (
-          <input autoFocus type="text" value={projectName} onChange={(e) => setProjectName(e.target.value)} onBlur={handleNameBlur} onKeyDown={(e) => e.key === "Enter" && handleNameBlur()} className="bg-surface-raised border border-accent rounded px-2 py-1 text-sm text-text-primary focus:outline-none" />
-        ) : (
-          <button onClick={() => setIsEditingName(true)} className="text-sm font-semibold text-text-primary hover:text-accent-soft transition-colors">
-            {project?.name}
-          </button>
-        )}
+        <span className="text-sm font-semibold text-text-primary">{project?.name}</span>
       </div>
 
       <div className="flex items-center gap-2 text-sm text-text-primary bg-surface-raised border border-border px-3 py-1 rounded-md">
