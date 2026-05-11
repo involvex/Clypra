@@ -1,13 +1,27 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Expand, Pause, Play, Shrink, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
-// import { Button } from "../ui/Button";
-import { usePlayback } from "../../hooks/usePlayback";
+import { usePlaybackClock, usePlaybackControls } from "../../hooks/usePlaybackClock";
+import { getPlaybackClock } from "../../core/playback";
 import { useProjectStore } from "../../store/projectStore";
 import { useTimelineStore } from "../../store/timelineStore";
 import { useUIStore } from "../../store/uiStore";
-import { resolvePreviewScene } from "../../lib/previewScene";
+import { evaluateSceneCached } from "../../core/evaluation/evaluator";
+import { getFrameScheduler } from "../../core/scheduler/FrameScheduler";
 import { SourcePreview } from "./SourcePreview";
 import { cn } from "../../lib/utils";
+import type { EvaluatedMediaLayer } from "../../core/evaluation/types";
+
+/** Format time in seconds to MM:SS or HH:MM:SS */
+function formatTime(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+
+  if (hours > 0) {
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
 
 /** Program preview “viewer” aspect (width / height). */
 type PreviewAspectPreset = "original" | "custom" | "16:9" | "4:3" | "2.35:1" | "2:1" | "1.85:1" | "9:16" | "3:4" | "5.8-inch" | "1:1";
@@ -46,7 +60,7 @@ function previewAspectWidthOverHeight(preset: PreviewAspectPreset, canvasWidth: 
   return PREVIEW_ASPECT_RATIO[preset] ?? canvasWidth / ch;
 }
 
-function resolveOriginalPreviewAspect(layers: Array<{ mediaId: string }>, mediaAssets: Array<{ id: string; width?: number; height?: number }>, canvasWidth: number, canvasHeight: number): number {
+function resolveOriginalPreviewAspect(layers: readonly { mediaId: string }[], mediaAssets: Array<{ id: string; width?: number; height?: number }>, canvasWidth: number, canvasHeight: number): number {
   const projectRatio = canvasWidth / Math.max(1, canvasHeight);
   if (layers.length !== 1) return projectRatio;
   const onlyLayer = layers[0];
@@ -116,10 +130,15 @@ export const PreviewPanel: React.FC = () => {
 };
 
 const ProgramPreview: React.FC = () => {
-  const { isPlaying, currentTime, duration, frameRate, playbackSpeed, play, pause, seek, formatTime, setPlaybackSpeed } = usePlayback();
+  // Imperative clock (throttled UI snapshots, 10fps)
+  const clockState = usePlaybackClock();
+  const { play, pause, seek, setSpeed, setDuration, setFrameRate } = usePlaybackControls();
+  const clock = getPlaybackClock();
+
   const { project, mediaAssets } = useProjectStore();
-  const { tracks, clips } = useTimelineStore();
+  const { tracks, clips, epoch } = useTimelineStore();
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState(100);
@@ -133,6 +152,43 @@ const ProgramPreview: React.FC = () => {
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
   const aspectMenuRef = useRef<HTMLDivElement>(null);
   const speedMenuRef = useRef<HTMLDivElement>(null);
+  const [useCanvasPreview] = useState(true); // Canvas is authoritative visual output
+  const [showTelemetry, setShowTelemetry] = useState(false);
+  const [telemetryStats, setTelemetryStats] = useState<{
+    avgEvaluationTimeMs: number;
+    avgRasterTimeMs: number;
+    avgTotalTimeMs: number;
+    cacheHitRate: number;
+    active: number;
+  } | null>(null);
+
+  // Initialize clock with project settings (only when they actually change)
+  const prevDurationRef = useRef<number>(0);
+  const prevFrameRateRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (!project) return;
+
+    // Calculate timeline duration from clips
+    const maxEndTime = clips.reduce((max, clip) => {
+      const endTime = clip.startTime + clip.duration;
+      return Math.max(max, endTime);
+    }, 0);
+
+    const newDuration = Math.max(maxEndTime, 10); // Minimum 10 seconds
+    const newFrameRate = project.frameRate || 30;
+
+    // Only update if values actually changed
+    if (newDuration !== prevDurationRef.current) {
+      setDuration(newDuration);
+      prevDurationRef.current = newDuration;
+    }
+
+    if (newFrameRate !== prevFrameRateRef.current) {
+      setFrameRate(newFrameRate);
+      prevFrameRateRef.current = newFrameRate;
+    }
+  }, [project, clips, setDuration, setFrameRate]);
 
   useEffect(() => {
     if (!aspectMenuOpen) return;
@@ -171,70 +227,224 @@ const ProgramPreview: React.FC = () => {
     return () => resizeObserver.disconnect();
   }, [project]);
 
-  const scene = useMemo(
-    () =>
-      resolvePreviewScene({
-        tracks,
-        clips,
-        assets: mediaAssets,
-        time: currentTime,
-        project: project ?? null,
-      }),
-    [tracks, clips, mediaAssets, currentTime, project],
-  );
+  // Scene evaluation (for UI and initial render)
+  const scene = useMemo(() => evaluateSceneCached(clockState.time, clips, tracks, mediaAssets, project ?? null, epoch), [tracks, clips, mediaAssets, clockState.time, project, epoch]);
 
-  // Sync videos when playback state changes or when seeking (not every frame)
+  // Canvas rendering - INDEPENDENT RAF LOOP (not tied to React state)
   useEffect(() => {
+    if (!useCanvasPreview || !canvasRef.current || !project) return;
+
+    const canvas = canvasRef.current;
+    const displayWidth = canvas.width;
+    const displayHeight = canvas.height;
+
+    if (displayWidth === 0 || displayHeight === 0) return;
+
+    // Get scheduler and update timeline state
+    const scheduler = getFrameScheduler();
+    scheduler.updateTimeline(clips, tracks, mediaAssets, project, epoch);
+
+    let rafId: number | null = null;
+    let isActive = true;
+    let isRendering = false;
+
+    // Independent render loop (reads clock imperatively)
+    const renderLoop = () => {
+      if (!isActive) return;
+
+      // Schedule next tick regardless of whether we render this frame
+      rafId = requestAnimationFrame(renderLoop);
+
+      // Drop frame if still rendering a previous frame
+      if (isRendering) return;
+
+      isRendering = true;
+
+      // IMPERATIVE READ - no React dependency
+      const time = clock.time;
+
+      // Schedule frame render (no cancellation on every frame)
+      const jobId = scheduler.schedule({
+        time,
+        resolution: {
+          width: displayWidth,
+          height: displayHeight,
+        },
+        pixelRatio: 1,
+        outputFormat: "imagebitmap",
+        priority: "realtime",
+      });
+
+      scheduler
+        .wait(jobId)
+        .then((result) => {
+          isRendering = false;
+          if (!isActive) return;
+
+          if (result.data instanceof ImageBitmap) {
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.clearRect(0, 0, displayWidth, displayHeight);
+              ctx.drawImage(result.data, 0, 0);
+              result.data.close();
+            }
+          }
+
+          // Update telemetry
+          const stats = scheduler.getStats();
+          setTelemetryStats({
+            avgEvaluationTimeMs: stats.avgEvaluationTimeMs,
+            avgRasterTimeMs: stats.avgRasterTimeMs,
+            avgTotalTimeMs: stats.avgTotalTimeMs,
+            cacheHitRate: stats.cacheHitRate,
+            active: stats.active,
+          });
+        })
+        .catch((error: Error) => {
+          isRendering = false;
+          if (error.message !== "Job cancelled" && isActive) {
+            console.error("Failed to render frame:", error);
+          }
+        });
+    };
+
+    // Start render loop
+    rafId = requestAnimationFrame(renderLoop);
+
+    // Cleanup
+    return () => {
+      isActive = false;
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+    };
+  }, [useCanvasPreview, clips, tracks, mediaAssets, project, epoch, clock]);
+
+  // Generate a key of currently visible video layers to trigger sync when new videos appear
+  const currentVideoClipsKey = useMemo(() => {
+    return scene.visualLayers
+      .filter((l): l is EvaluatedMediaLayer => l.layerType === "media" && l.mediaType === "video")
+      .map((l) => `${l.clipId}-${l.mediaId}`)
+      .join(",");
+  }, [scene.visualLayers]);
+
+  // Video sync - EVENT DRIVEN (only on state changes, not every frame)
+  useEffect(() => {
+    console.log("[PreviewPanel] Video sync effect triggered", {
+      state: clockState.state,
+      videoCount: Object.keys(videoRefs.current).length,
+    });
+
+    const currentClockTime = clock.time;
+
     Object.values(videoRefs.current).forEach((video) => {
       if (!video) return;
-      const layer = scene.layers.find((l) => l.mediaId === video.dataset.mediaId && l.clipId === video.dataset.clipId);
-      if (!layer) return;
 
+      console.log("[PreviewPanel] Syncing video", {
+        mediaId: video.dataset.mediaId,
+        clipId: video.dataset.clipId,
+        videoDuration: video.duration,
+        clockState: clockState.state,
+        videoPaused: video.paused,
+      });
+
+      // Audio settings
       video.muted = isMuted || volume === 0;
       video.volume = Math.max(0, Math.min(1, volume / 100));
-      video.playbackRate = playbackSpeed;
+      video.playbackRate = clockState.speed;
 
+      // Set initial time when starting playback or when paused
       if (Number.isFinite(video.duration) && video.duration > 0) {
-        const targetTime = Math.max(0, Math.min(layer.sourceTime, Math.max(0, video.duration - 0.01)));
+        const clipId = video.dataset.clipId;
+        const clip = clips.find((c) => c.id === clipId);
 
-        // When playing: let videos play naturally, only sync if drift is large
-        // When paused: always sync precisely for scrubbing
-        if (isPlaying) {
-          const drift = Math.abs(video.currentTime - targetTime);
-          // Only seek if drift exceeds 1 second (very lenient during playback)
-          if (drift > 1.0) {
+        if (clip) {
+          const clipLocalTime = currentClockTime - clip.startTime;
+          const trimIn = clip.trimIn || 0; // Default to 0 if undefined
+          const sourceTime = trimIn + clipLocalTime;
+          const targetTime = Math.max(0, Math.min(sourceTime, Math.max(0, video.duration - 0.01)));
+
+          // Set time when paused or when starting playback
+          if (clockState.state !== "playing") {
             video.currentTime = targetTime;
-          }
-        } else {
-          // When paused, sync precisely for accurate scrubbing
-          if (Math.abs(video.currentTime - targetTime) > 0.05) {
+            console.log("[PreviewPanel] Set video.currentTime to", targetTime);
+          } else if (video.paused) {
+            // Starting playback - set initial time
             video.currentTime = targetTime;
+            console.log("[PreviewPanel] Set initial video.currentTime to", targetTime);
           }
         }
       }
 
-      if (isPlaying) {
-        // Only call play() if video is actually paused
+      // Play/pause based on clock state
+      if (clockState.state === "playing") {
         if (video.paused) {
-          try {
-            const p = video.play();
-            if (p && typeof p.catch === "function") void p.catch(() => undefined);
-          } catch {
-            // noop in test/jsdom environments
-          }
+          console.log("[PreviewPanel] Calling video.play()");
+          const p = video.play();
+          if (p && typeof p.catch === "function")
+            void p.catch((err) => {
+              console.error("[PreviewPanel] video.play() failed:", err);
+            });
         }
       } else {
-        // Only call pause() if video is actually playing
         if (!video.paused) {
-          try {
-            video.pause();
-          } catch {
-            // noop
-          }
+          console.log("[PreviewPanel] Calling video.pause()");
+          video.pause();
         }
       }
     });
-  }, [scene, isPlaying, isMuted, volume, playbackSpeed, previewVideoReadyTick]);
+  }, [clockState.state, isMuted, volume, clockState.speed, clips, clock, previewVideoReadyTick, currentVideoClipsKey]);
+
+  // Periodic drift correction (low frequency, not every frame)
+  useEffect(() => {
+    if (clockState.state !== "playing") return;
+
+    const interval = setInterval(() => {
+      const currentClockTime = clock.time;
+
+      Object.values(videoRefs.current).forEach((video) => {
+        if (!video) return;
+
+        // Find the clip for this video
+        const clipId = video.dataset.clipId;
+        const clip = clips.find((c) => c.id === clipId);
+        if (!clip) return;
+
+        // Calculate source time based on clock time
+        const clipLocalTime = currentClockTime - clip.startTime;
+        if (clipLocalTime < 0 || clipLocalTime > clip.duration) {
+          // Video is outside clip bounds, pause it
+          if (!video.paused) {
+            video.pause();
+          }
+          return;
+        }
+
+        // Calculate source time (accounting for trim)
+        const trimIn = clip.trimIn || 0; // Default to 0 if undefined
+        const sourceTime = trimIn + clipLocalTime;
+
+        // readyState >= 3 means HAVE_FUTURE_DATA (can play smoothly)
+        if (Number.isFinite(video.duration) && video.duration > 0 && video.readyState >= 3) {
+          const targetTime = Math.max(0, Math.min(sourceTime, Math.max(0, video.duration - 0.01)));
+          const drift = Math.abs(video.currentTime - targetTime);
+
+          // Only correct if drift exceeds 400ms to avoid constant crackling
+          if (drift > 0.4) {
+            console.log("[PreviewPanel] Drift correction", {
+              clipId,
+              videoCurrent: video.currentTime,
+              targetTime,
+              drift,
+            });
+            video.currentTime = targetTime;
+          }
+        }
+      });
+    }, 250); // Check every 250ms
+
+    return () => clearInterval(interval);
+  }, [clockState.state, clips, clock]);
 
   if (!project) return null;
 
@@ -252,7 +462,12 @@ const ProgramPreview: React.FC = () => {
 
   const canvasWidth = project.canvasWidth;
   const canvasHeight = project.canvasHeight;
-  const originalAspectR = resolveOriginalPreviewAspect(scene.layers, mediaAssets, canvasWidth, canvasHeight);
+  const originalAspectR = resolveOriginalPreviewAspect(
+    scene.visualLayers.filter((l) => l.layerType === "media"),
+    mediaAssets,
+    canvasWidth,
+    canvasHeight,
+  );
   const aspectR = previewAspectPreset === "original" ? originalAspectR : previewAspectWidthOverHeight(previewAspectPreset, canvasWidth, canvasHeight);
   const { vw, vh } = previewViewportSize(dimensions.width, dimensions.height, aspectR);
   const scaleFit = Math.min(vw / canvasWidth, vh / canvasHeight);
@@ -270,6 +485,12 @@ const ProgramPreview: React.FC = () => {
     setAspectMenuOpen(false);
   };
 
+  // Derive UI values from clock state
+  const currentTime = clockState.time;
+  const duration = clockState.duration;
+  const isPlaying = clockState.state === "playing";
+  const playbackSpeed = clockState.speed;
+  const frameRate = clockState.frameRate;
   const step = 1 / Math.max(1, frameRate);
 
   return (
@@ -278,35 +499,38 @@ const ProgramPreview: React.FC = () => {
       <div className="flex items-center px-4 h-10 shrink-0 gap-2">
         <span className="text-[13px] font-semibold text-text-primary tracking-tight">Program Preview</span>
         <span className="text-[13px] text-text-muted">— Timeline</span>
+        <button onClick={() => setShowTelemetry((s) => !s)} className={cn("ml-auto px-2 h-6 rounded text-[10px] font-medium transition-colors", showTelemetry ? "bg-accent/20 text-accent" : "text-text-muted hover:text-text-primary hover:bg-white/6")} title="Toggle render telemetry">
+          Stats
+        </button>
       </div>
 
       {/* ── Video Area ─────────────────────────────────────────────── */}
       <div className="flex-1 flex items-center justify-center overflow-hidden bg-[#06080a] relative">
         <div className="absolute inset-0 checkerboard opacity-[0.15] pointer-events-none" />
         <div ref={containerRef} className="w-full h-full flex items-center justify-center relative z-10 overflow-hidden">
-          <div data-testid="program-preview-viewport" className="relative flex shrink-0 items-center justify-center overflow-hidden rounded shadow-[0_0_40px_rgba(0,0,0,0.8)] ring-1 ring-white/10" style={{ width: vw, height: vh }}>
-            <div data-testid="program-preview-canvas" className="relative shrink-0 bg-black" style={{ width: displayWidth, height: displayHeight }}>
-              {scene.layers.length === 0 ? (
-                <div className="absolute inset-0 flex items-center justify-center text-text-muted">Preview</div>
-              ) : (
-                scene.layers.map((layer) => (
-                  <div
-                    key={`${layer.clipId}-${layer.mediaId}`}
-                    data-testid="preview-layer"
-                    className="absolute overflow-hidden"
-                    style={{
-                      left: layer.x * scale,
-                      top: layer.y * scale,
-                      width: layer.width * scale,
-                      height: layer.height * scale,
-                      opacity: Math.max(0, Math.min(1, layer.opacity > 1 ? layer.opacity / 100 : layer.opacity)),
-                      transform: `rotate(${layer.rotation}deg)`,
-                      transformOrigin: "center center",
-                      zIndex: layer.zIndex + 1,
-                    }}
-                  >
-                    {layer.mediaType === "video" ? (
+          <div data-testid="program-preview-viewport" className="relative flex shrink-0 items-center justify-center overflow-hidden shadow-[0_0_40px_rgba(0, 0, 0, 0.36)]" style={{ width: vw, height: vh }}>
+            {useCanvasPreview ? (
+              <>
+                {/* Canvas-based preview (matches export rendering) */}
+                <canvas
+                  ref={canvasRef}
+                  data-testid="program-preview-canvas"
+                  width={displayWidth}
+                  height={displayHeight}
+                  style={{
+                    width: displayWidth,
+                    height: displayHeight,
+                    imageRendering: "auto",
+                  }}
+                  className="bg-black"
+                />
+                {/* Hidden video elements for audio sync (ENGINE CLOCK IS MASTER) */}
+                <div className="absolute opacity-0 pointer-events-none" style={{ width: 0, height: 0, overflow: "hidden" }}>
+                  {scene.visualLayers
+                    .filter((l): l is EvaluatedMediaLayer => l.layerType === "media" && l.mediaType === "video")
+                    .map((layer) => (
                       <video
+                        key={`audio-${layer.clipId}-${layer.mediaId}`}
                         data-media-id={layer.mediaId}
                         data-clip-id={layer.clipId}
                         ref={(el) => {
@@ -317,17 +541,126 @@ const ProgramPreview: React.FC = () => {
                         playsInline
                         preload="auto"
                         onLoadedMetadata={() => setPreviewVideoReadyTick((n) => n + 1)}
-                        className="w-full h-full object-contain"
                       />
-                    ) : (
-                      <img src={layer.posterFrame || layer.sourcePath} alt={layer.mediaId} className="w-full h-full object-contain" />
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
+                    ))}
+                </div>
+              </>
+            ) : (
+              // DOM-based preview (legacy, for comparison)
+              <div data-testid="program-preview-canvas" className="relative shrink-0 bg-black" style={{ width: displayWidth, height: displayHeight }}>
+                {scene.visualLayers.length === 0 ? (
+                  <div className="absolute inset-0 flex items-center justify-center text-text-muted">Preview</div>
+                ) : (
+                  scene.visualLayers.map((layer) => {
+                    // Render text layers
+                    if (layer.layerType === "text") {
+                      return (
+                        <div
+                          key={layer.layerId}
+                          data-testid="preview-text-layer"
+                          className="absolute overflow-hidden flex items-center justify-center"
+                          style={{
+                            left: layer.x * scale,
+                            top: layer.y * scale,
+                            width: layer.width * scale,
+                            height: layer.height * scale,
+                            opacity: Math.max(0, Math.min(1, layer.opacity > 1 ? layer.opacity / 100 : layer.opacity)),
+                            transform: `rotate(${layer.rotation}deg)`,
+                            transformOrigin: "center center",
+                            zIndex: layer.zIndex + 1,
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontFamily: layer.fontFamily,
+                              fontSize: `${layer.fontSize * scale}px`,
+                              color: layer.color,
+                              fontWeight: layer.fontWeight,
+                              fontStyle: layer.fontStyle,
+                              textAlign: layer.textAlign,
+                              lineHeight: layer.lineHeight,
+                              letterSpacing: `${layer.letterSpacing * scale}px`,
+                              whiteSpace: "pre-wrap",
+                              wordBreak: "break-word",
+                              width: "100%",
+                              padding: "8px",
+                            }}
+                          >
+                            {layer.text}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    // Render media layers (video/image)
+                    return (
+                      <div
+                        key={layer.layerId}
+                        data-testid="preview-layer"
+                        className="absolute overflow-hidden"
+                        style={{
+                          left: layer.x * scale,
+                          top: layer.y * scale,
+                          width: layer.width * scale,
+                          height: layer.height * scale,
+                          opacity: Math.max(0, Math.min(1, layer.opacity > 1 ? layer.opacity / 100 : layer.opacity)),
+                          transform: `rotate(${layer.rotation}deg)`,
+                          transformOrigin: "center center",
+                          zIndex: layer.zIndex + 1,
+                        }}
+                      >
+                        {layer.mediaType === "video" ? (
+                          <video
+                            data-media-id={layer.mediaId}
+                            data-clip-id={layer.clipId}
+                            ref={(el) => {
+                              videoRefs.current[`${layer.clipId}-${layer.mediaId}`] = el;
+                            }}
+                            src={layer.sourcePath}
+                            muted={isMuted || volume === 0}
+                            playsInline
+                            preload="auto"
+                            onLoadedMetadata={() => setPreviewVideoReadyTick((n) => n + 1)}
+                            className="w-full h-full object-contain"
+                          />
+                        ) : (
+                          <img src={layer.posterFrame || layer.sourcePath} alt={layer.mediaId} className="w-full h-full object-contain" />
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
           </div>
         </div>
+
+        {/* Telemetry Overlay */}
+        {showTelemetry && telemetryStats && (
+          <div className="absolute top-4 left-4 z-20 bg-black/80 backdrop-blur-sm rounded-lg p-3 text-xs font-mono text-white/90 space-y-1 border border-white/10">
+            <div className="font-semibold text-accent mb-2">Render Telemetry</div>
+            <div className="flex justify-between gap-4">
+              <span className="text-white/60">Eval:</span>
+              <span>{telemetryStats.avgEvaluationTimeMs.toFixed(2)}ms</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-white/60">Raster:</span>
+              <span>{telemetryStats.avgRasterTimeMs.toFixed(2)}ms</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-white/60">Total:</span>
+              <span>{telemetryStats.avgTotalTimeMs.toFixed(2)}ms</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-white/60">Cache:</span>
+              <span>{(telemetryStats.cacheHitRate * 100).toFixed(0)}%</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-white/60">Active:</span>
+              <span>{telemetryStats.active}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Scrub Bar (thin, edge-to-edge) ────────────────────────── */}
@@ -381,7 +714,7 @@ const ProgramPreview: React.FC = () => {
                       aria-selected={playbackSpeed === speed}
                       className={cn("flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-text-primary hover:bg-surface-raised", playbackSpeed === speed && "bg-surface-raised")}
                       onClick={() => {
-                        setPlaybackSpeed(speed);
+                        setSpeed(speed);
                         setSpeedMenuOpen(false);
                       }}
                     >
@@ -400,7 +733,18 @@ const ProgramPreview: React.FC = () => {
           <button onClick={() => seek(Math.max(0, currentTime - step))} className="w-7 h-7 flex items-center justify-center rounded hover:bg-white/6 transition-colors text-text-muted hover:text-text-primary" title="Previous frame">
             <SkipBack className="w-3.5 h-3.5" />
           </button>
-          <button onClick={() => (isPlaying ? pause() : play())} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/6 transition-colors text-text-primary mx-1" title={isPlaying ? "Pause" : "Play"}>
+          <button
+            onClick={() => {
+              console.log("[PreviewPanel] Play/Pause button clicked", {
+                isPlaying,
+                clockState: clockState.state,
+                action: isPlaying ? "pause" : "play",
+              });
+              isPlaying ? pause() : play();
+            }}
+            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/6 transition-colors text-text-primary mx-1"
+            title={isPlaying ? "Pause" : "Play"}
+          >
             {isPlaying ? <Pause className="w-[18px] h-[18px]" /> : <Play className="w-[18px] h-[18px] ml-0.5" />}
           </button>
           <button onClick={() => seek(Math.min(duration, currentTime + step))} className="w-7 h-7 flex items-center justify-center rounded hover:bg-white/6 transition-colors text-text-muted hover:text-text-primary" title="Next frame">
