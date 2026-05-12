@@ -847,14 +847,8 @@ export const Timeline: React.FC = () => {
         <TrackList />
 
         <div ref={containerRef} onScroll={handleScroll} onClick={seekFromPointer} id="timeline-tracks-container" className={`flex-1 overflow-x-auto overflow-y-auto scrollbar-thin px-1 relative transition-colors border-l border-[#2b3442] ${isDraggingOver ? "bg-cyan-500/10 ring-2 ring-cyan-500/50 ring-inset" : ""}`}>
-          {clips.length === 0 && (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="flex items-center gap-3 text-[#6b7280] pointer-events-none">
-                <FolderOpen className="w-5 h-5" />
-                <span className="text-sm">Drag material here and start to create</span>
-              </div>
-            </div>
-          )}
+          {/* Minimal empty state hint - brutally subtle, preserves workspace identity */}
+          {clips.length === 0 && <div className="absolute bottom-3 left-3 text-[10px] text-text-muted/40 pointer-events-none font-mono">Drop media here • I to import</div>}
 
           <div
             style={{

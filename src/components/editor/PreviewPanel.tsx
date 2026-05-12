@@ -700,6 +700,22 @@ const ProgramPreview: React.FC = () => {
           </div>
         </div>
 
+        {/* Professional empty state - shows sequence context when no clips */}
+        {clips.length === 0 && (
+          <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
+            <div className="text-center space-y-3">
+              <div className="text-sm font-medium text-text-muted">No clips in sequence</div>
+              <div className="text-xs text-text-muted/80 space-y-1 font-mono">
+                <div>
+                  {canvasWidth}×{canvasHeight} • {frameRate}fps
+                </div>
+                <div className="text-text-muted/60">Rec.709</div>
+              </div>
+              <div className="text-xs text-text-muted/70 mt-4">Import media or drag clips to timeline</div>
+            </div>
+          </div>
+        )}
+
         {/* Telemetry Overlay */}
         {showTelemetry && telemetryStats && (
           <div className="absolute top-4 left-4 z-20 bg-black/80 backdrop-blur-sm rounded-lg p-3 text-xs font-mono text-white/90 space-y-1 border border-white/10">
