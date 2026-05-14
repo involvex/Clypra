@@ -236,8 +236,21 @@ export const useTimelineStore = create<TimelineStore>(
 
     removeClip: (clipId) => {
       set((state) => {
+        const remainingClips = state.clips.filter((c) => c.id !== clipId);
+
+        // If removing the last clip, reset playhead to 00:00
+        if (remainingClips.length === 0) {
+          // Import dynamically to avoid circular dependency
+          import("../core/runtime/ProjectSession").then(({ getActiveSessionOrNull }) => {
+            const session = getActiveSessionOrNull();
+            if (session) {
+              session.transportAuthority.seek(0);
+            }
+          });
+        }
+
         const next: Partial<TimelineStore> = {
-          clips: state.clips.filter((c) => c.id !== clipId),
+          clips: remainingClips,
         };
         if (state._batchDepth > 0) {
           next._pendingEpochIncrement = true;
