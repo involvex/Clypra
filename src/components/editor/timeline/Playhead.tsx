@@ -19,6 +19,10 @@ export const Playhead: React.FC<PlayheadProps> = ({ pixelsPerSecond, duration, c
   const pointerIdRef = useRef<number | null>(null);
   const pointerXRef = useRef(0); // Pointer position in viewport space
   const dragOffsetRef = useRef(0); // Offset captured at drag start for smooth anchor
+  const clearDragCursorLock = () => {
+    document.body.style.userSelect = "";
+    document.body.classList.remove("cursor-lock-col");
+  };
 
   const currentTime = clockState.time;
 
@@ -120,8 +124,7 @@ export const Playhead: React.FC<PlayheadProps> = ({ pixelsPerSecond, duration, c
         setIsDragging(false);
         scrollVelocityRef.current = 0;
         pointerIdRef.current = null;
-        document.body.style.userSelect = "";
-        document.body.classList.remove("cursor-lock-ew");
+        clearDragCursorLock();
 
         // Release pointer capture if it was set
         if (playheadRef.current) {
@@ -139,26 +142,44 @@ export const Playhead: React.FC<PlayheadProps> = ({ pixelsPerSecond, duration, c
       setIsDragging(false);
       scrollVelocityRef.current = 0;
       pointerIdRef.current = null;
-      document.body.style.userSelect = "";
-      document.body.classList.remove("cursor-lock-ew");
+      clearDragCursorLock();
+    };
+
+    const handlePointerCancel = (e: PointerEvent) => {
+      if (pointerIdRef.current !== null && e.pointerId !== pointerIdRef.current) return;
+      setIsDragging(false);
+      scrollVelocityRef.current = 0;
+      pointerIdRef.current = null;
+      clearDragCursorLock();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        setIsDragging(false);
+        scrollVelocityRef.current = 0;
+        pointerIdRef.current = null;
+        clearDragCursorLock();
+      }
     };
 
     // Prevent text selection during drag
     document.body.style.userSelect = "none";
-    document.body.classList.add("cursor-lock-ew");
+    document.body.classList.add("cursor-lock-col");
 
     // ✅ Use GLOBAL pointer events (not element-bound)
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
     window.addEventListener("blur", handleWindowBlur);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
       window.removeEventListener("blur", handleWindowBlur);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      document.body.classList.remove("cursor-lock-ew");
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      clearDragCursorLock();
       scrollVelocityRef.current = 0;
     };
   }, [isDragging, containerRef]);
@@ -205,15 +226,21 @@ export const Playhead: React.FC<PlayheadProps> = ({ pixelsPerSecond, duration, c
       ref={playheadRef}
       data-playhead="true"
       data-timeline-interactive="true"
-      className={`absolute inset-y-0 select-none cursor-timeline-ew pointer-events-none ${isDragging ? "cursor-timeline-ew-grabbing" : ""}`}
+      className="absolute inset-y-0 select-none pointer-events-none"
       style={{
         left: `${left}px`,
         width: "8px",
         marginLeft: "-3px",
         zIndex: 100,
-        touchAction: "none", // Prevent default touch behaviors
+        touchAction: "none",
       }}
       onPointerDown={handlePointerDown}
+      onLostPointerCapture={() => {
+        setIsDragging(false);
+        scrollVelocityRef.current = 0;
+        pointerIdRef.current = null;
+        clearDragCursorLock();
+      }}
       onClick={(e) => e.stopPropagation()}
     >
       {/* Visual line */}
@@ -222,6 +249,7 @@ export const Playhead: React.FC<PlayheadProps> = ({ pixelsPerSecond, duration, c
         style={{
           width: "2px",
           boxShadow: "0 0 0 1px rgba(0,0,0,0.25)",
+          cursor: "col-resize",
         }}
       />
 
@@ -235,6 +263,7 @@ export const Playhead: React.FC<PlayheadProps> = ({ pixelsPerSecond, duration, c
           width: "10px",
           height: "10px",
           boxShadow: "0 0 0 1px rgba(0,0,0,0.35)",
+          cursor: "col-resize",
         }}
       />
     </div>

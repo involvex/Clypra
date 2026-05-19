@@ -1,6 +1,7 @@
 import { DEFAULT_STILL_DURATION_SECONDS } from "../constants/config";
 import type { Clip, MediaAsset } from "../types";
 import { generateId } from "./id";
+import { DEFAULT_PLACEMENT_POLICY } from "./placementPolicy";
 
 export const resolveClipDuration = (asset: MediaAsset): number => {
   if (asset.type === "image") return DEFAULT_STILL_DURATION_SECONDS;
@@ -50,6 +51,7 @@ interface CreateClipFromAssetParams {
   startTime: number;
   width: number;
   height: number;
+  fitMode?: ClipFitModeExtended;
 }
 
 /**
@@ -57,6 +59,20 @@ interface CreateClipFromAssetParams {
  * Mirrors professional NLE behavior (Premiere, Resolve, FCP).
  */
 export type ClipFitMode = "contain" | "cover" | "stretch" | "original";
+export type ClipFitModeExtended = ClipFitMode | "fill";
+
+function getAssetBoundsForFit(asset: MediaAsset, fitMode: ClipFitModeExtended): { width: number; height: number } {
+  const sourceWidth = asset.width ?? 0;
+  const sourceHeight = asset.height ?? 0;
+  const content = asset.contentBounds;
+
+  // "fill" is perceptual-fit mode: use content bounds when available.
+  if (fitMode === "fill" && content && content.width > 0 && content.height > 0) {
+    return { width: content.width, height: content.height };
+  }
+
+  return { width: sourceWidth, height: sourceHeight };
+}
 
 /**
  * Calculate clip dimensions that preserve aspect ratio within canvas bounds.
@@ -69,9 +85,10 @@ export type ClipFitMode = "contain" | "cover" | "stretch" | "original";
  *
  * Default is "cover" - common short-form editor behavior where media fills frame.
  */
-function calculateClipDimensions(asset: MediaAsset, canvasWidth: number, canvasHeight: number, fitMode: ClipFitMode = "contain"): { x: number; y: number; width: number; height: number } {
-  const assetWidth = asset.width ?? canvasWidth;
-  const assetHeight = asset.height ?? canvasHeight;
+export function calculateClipDimensions(asset: MediaAsset, canvasWidth: number, canvasHeight: number, fitMode: ClipFitModeExtended = "contain"): { x: number; y: number; width: number; height: number } {
+  const bounds = getAssetBoundsForFit(asset, fitMode);
+  const assetWidth = bounds.width || canvasWidth;
+  const assetHeight = bounds.height || canvasHeight;
 
   // Fallback for assets without dimensions
   if (assetWidth <= 0 || assetHeight <= 0) {
@@ -99,7 +116,8 @@ function calculateClipDimensions(asset: MediaAsset, canvasWidth: number, canvasH
       break;
     }
 
-    case "cover": {
+    case "cover":
+    case "fill": {
       // Fill canvas completely, preserve aspect ratio, crop overflow
       if (assetAspect > canvasAspect) {
         // Asset is wider - fit to height, crop width
@@ -135,11 +153,11 @@ function calculateClipDimensions(asset: MediaAsset, canvasWidth: number, canvasH
   return { x, y, width, height };
 }
 
-export const createClipFromAsset = ({ asset, trackId, startTime, width, height }: CreateClipFromAssetParams): Clip => {
+export const createClipFromAsset = ({ asset, trackId, startTime, width, height, fitMode = DEFAULT_PLACEMENT_POLICY.defaultVisualFitMode }: CreateClipFromAssetParams): Clip => {
   const duration = resolveClipDuration(asset);
 
   // Calculate dimensions that preserve aspect ratio.
-  // Default to "cover" so first placement fills the sequence frame.
+  // Default fit mode is centralized in placement policy.
   const {
     x,
     y,
@@ -149,7 +167,7 @@ export const createClipFromAsset = ({ asset, trackId, startTime, width, height }
     asset,
     width,
     height,
-    "cover",
+    fitMode,
   );
 
   // Calculate source aspect ratio for transform constraints
@@ -171,5 +189,6 @@ export const createClipFromAsset = ({ asset, trackId, startTime, width, height }
     rotation: 0,
     aspectRatioLocked: true, // Lock aspect ratio by default for video/images
     sourceAspectRatio,
+    fitMode: fitMode as Clip["fitMode"],
   };
 };

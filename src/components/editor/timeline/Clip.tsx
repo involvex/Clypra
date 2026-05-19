@@ -7,6 +7,11 @@ import { TimelineWaveform } from "./TimelineWaveform";
 
 /** Movement past this (px) starts a clip drag; below it, release is still a click (selection set on pointerDown). */
 const DRAG_THRESHOLD_PX = 6;
+const RESIZE_TRACE = import.meta.env.DEV;
+const traceResize = (...args: unknown[]) => {
+  if (!RESIZE_TRACE) return;
+  console.log("[ClipResizeTrace]", ...args);
+};
 
 interface ClipProps {
   clip: ClipType;
@@ -29,6 +34,7 @@ const ClipInner: React.FC<ClipProps> = ({ clip, mediaAsset, pixelsPerSecond, sel
   const { selectClip, toggleClipSelection } = useUIStore();
   const { updateClip, rippleEditEnabled, rippleTrimClip } = useTimelineStore();
   const [isResizing, setIsResizing] = useState<"left" | "right" | null>(null);
+  const [isHovered, setIsHovered] = useState(false);
   const [resizeStart, setResizeStart] = useState<{ x: number; startTime: number; duration: number; trimIn: number; trimOut: number; isRipple: boolean } | null>(null);
   const clipRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ startX: number; startY: number; startTime: number; hasMoved: boolean; hasDragStarted: boolean; pointerId: number } | null>(null);
@@ -41,7 +47,7 @@ const ClipInner: React.FC<ClipProps> = ({ clip, mediaAsset, pixelsPerSecond, sel
   const isDragging = dragState?.isDragging || false;
   const isInvalidPosition = dragState?.isInvalidPosition || false;
   const displayLeft = isDragging ? left + (dragState?.offsetX || 0) : left;
-  const showResizeHandles = Boolean(selected || isResizing);
+  const showResizeHandles = Boolean(selected || isResizing || isHovered);
 
   // Handle pointer-based drag
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -124,12 +130,38 @@ const ClipInner: React.FC<ClipProps> = ({ clip, mediaAsset, pixelsPerSecond, sel
     dragStartRef.current = null;
   };
 
-  const handleResizeStart = (e: React.MouseEvent, side: "left" | "right") => {
+  const resizePointerIdRef = useRef<number | null>(null);
+  const activeResizeHandleRef = useRef<HTMLElement | null>(null);
+
+  const handleResizeStart = (e: React.PointerEvent, side: "left" | "right") => {
     e.stopPropagation();
+    e.preventDefault();
+    if (e.button !== 0) return;
     if (locked) return;
 
     // Let's check if ripple mode is active (Shift key OR global ripple mode enabled)
     const isRipple = e.shiftKey || rippleEditEnabled;
+    traceResize("pointerdown", {
+      clipId: clip.id,
+      side,
+      pointerId: e.pointerId,
+      button: e.button,
+      clientX: e.clientX,
+      isRipple,
+      selected,
+      locked,
+      startTime: clip.startTime,
+      duration: clip.duration,
+      trimIn: clip.trimIn,
+      trimOut: clip.trimOut,
+    });
+    resizePointerIdRef.current = e.pointerId;
+    activeResizeHandleRef.current = e.currentTarget as HTMLElement;
+    try {
+      activeResizeHandleRef.current.setPointerCapture(e.pointerId);
+    } catch {
+      // Best-effort: window listeners below still provide robustness.
+    }
 
     setIsResizing(side);
     setResizeStart({
@@ -147,13 +179,34 @@ const ClipInner: React.FC<ClipProps> = ({ clip, mediaAsset, pixelsPerSecond, sel
 
   useEffect(() => {
     if (!isResizing || !resizeStart) return;
+    traceResize("resize-started", {
+      clipId: clip.id,
+      side: isResizing,
+      pointerId: resizePointerIdRef.current,
+      resizeStart,
+    });
 
-    const handleMouseMove = (e: MouseEvent) => {
+    const handlePointerMove = (e: PointerEvent) => {
+      if (resizePointerIdRef.current !== null && e.pointerId !== resizePointerIdRef.current) return;
       const deltaX = e.clientX - resizeStart.x;
       const deltaTime = deltaX / pixelsPerSecond;
+      traceResize("pointermove", {
+        clipId: clip.id,
+        side: isResizing,
+        pointerId: e.pointerId,
+        clientX: e.clientX,
+        deltaX,
+        deltaTime,
+        ripple: resizeStart.isRipple,
+      });
 
       if (resizeStart.isRipple) {
         // RIPPLE MODE: Shift downstream clips
+        traceResize("apply-ripple-trim", {
+          clipId: clip.id,
+          side: isResizing,
+          deltaTime,
+        });
         rippleTrimClip(clip.id, isResizing, deltaTime);
 
         // Update resizeStart to track cumulative changes
@@ -188,6 +241,12 @@ const ClipInner: React.FC<ClipProps> = ({ clip, mediaAsset, pixelsPerSecond, sel
             duration: Math.max(minDuration, newDuration),
             trimIn: Math.max(0, Math.min(newTrimIn, maxTrimIn)),
           });
+          traceResize("apply-standard-left", {
+            clipId: clip.id,
+            newStartTime: Math.max(0, newStartTime),
+            newDuration: Math.max(minDuration, newDuration),
+            newTrimIn: Math.max(0, Math.min(newTrimIn, maxTrimIn)),
+          });
         } else {
           // Resize from right (trim out)
           const minDuration = 0.1;
@@ -202,22 +261,62 @@ const ClipInner: React.FC<ClipProps> = ({ clip, mediaAsset, pixelsPerSecond, sel
             duration: newDuration,
             trimOut: Math.min(newTrimOut, maxMediaTime),
           });
+          traceResize("apply-standard-right", {
+            clipId: clip.id,
+            newDuration,
+            newTrimOut: Math.min(newTrimOut, maxMediaTime),
+          });
         }
       }
     };
 
-    const handleMouseUp = () => {
+    const finishResize = () => {
+      if (activeResizeHandleRef.current && resizePointerIdRef.current !== null) {
+        try {
+          activeResizeHandleRef.current.releasePointerCapture(resizePointerIdRef.current);
+        } catch {
+          // Ignore when capture is already released.
+        }
+      }
       setIsResizing(null);
       setResizeStart(null);
+      activeResizeHandleRef.current = null;
+      resizePointerIdRef.current = null;
       document.body.style.userSelect = "";
     };
 
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
+    const handlePointerUp = (e: PointerEvent) => {
+      if (resizePointerIdRef.current !== null && e.pointerId !== resizePointerIdRef.current) return;
+      traceResize("pointerup", {
+        clipId: clip.id,
+        side: isResizing,
+        pointerId: e.pointerId,
+      });
+      finishResize();
+    };
+
+    const handlePointerCancel = (e: PointerEvent) => {
+      if (resizePointerIdRef.current !== null && e.pointerId !== resizePointerIdRef.current) return;
+      traceResize("pointercancel", {
+        clipId: clip.id,
+        side: isResizing,
+        pointerId: e.pointerId,
+      });
+      finishResize();
+    };
+
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerup", handlePointerUp);
+    document.addEventListener("pointercancel", handlePointerCancel);
 
     return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", handlePointerUp);
+      document.removeEventListener("pointercancel", handlePointerCancel);
+      traceResize("resize-effect-cleanup", {
+        clipId: clip.id,
+        side: isResizing,
+      });
     };
   }, [isResizing, resizeStart, clip.id, pixelsPerSecond, updateClip, rippleTrimClip, mediaAsset]);
 
@@ -244,12 +343,15 @@ const ClipInner: React.FC<ClipProps> = ({ clip, mediaAsset, pixelsPerSecond, sel
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerCancel}
+      onPointerEnter={() => setIsHovered(true)}
+      onPointerLeave={() => setIsHovered(false)}
       className={`absolute h-full rounded-sm overflow-hidden border-2 ${selected ? "border-white" : ""} ${isResizing ? (resizeStart?.isRipple ? "ring-2 ring-yellow-500" : "ring-2 ring-cyan-500") : ""} ${locked ? "cursor-not-allowed" : isDragging ? (isInvalidPosition ? "cursor-not-allowed" : "cursor-grabbing") : "cursor-default"} ${getClipColor()} transition-none`}
       style={{
         left: `${displayLeft}px`,
         width: `${width}px`,
         opacity: isInvalidPosition ? 0.5 : 1,
         pointerEvents: "auto",
+        touchAction: "none",
         zIndex: isDragging ? 100 : 1,
         boxShadow: "none",
         transformOrigin: isDragging ? "0 0" : undefined,
@@ -260,13 +362,19 @@ const ClipInner: React.FC<ClipProps> = ({ clip, mediaAsset, pixelsPerSecond, sel
       {/* Left trim handle */}
       <div
         data-testid={`clip-${clip.id}-resize-left`}
-        className={`absolute left-0 top-0 w-3 h-full cursor-ew-resize z-20 ${showResizeHandles ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"} ${isResizing === "left" ? (resizeStart?.isRipple ? "bg-yellow-300/60" : "bg-cyan-300/60") : "bg-transparent"}`}
-        onMouseDown={(e) => {
+        className={`absolute left-0 top-0 w-4 h-full z-30 ${showResizeHandles ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"} ${isResizing === "left" ? (resizeStart?.isRipple ? "bg-yellow-300/60" : "bg-cyan-300/60") : "bg-white/25 hover:bg-white/35"} transition-colors`}
+        style={{ touchAction: "none", cursor: "col-resize" }}
+        onPointerDownCapture={(e) => {
+          e.stopPropagation();
+        }}
+        onPointerDown={(e) => {
           e.stopPropagation(); // Prevent drag when clicking resize handle
           handleResizeStart(e, "left");
         }}
         title={rippleEditEnabled ? "Ripple trim (ripple mode ON)" : "Hold Shift for ripple trim"}
-      />
+      >
+        <div className="absolute left-[5px] top-1/2 h-5 w-[2px] -translate-y-1/2 rounded bg-white/90" />
+      </div>
 
       {/* Clip content */}
       <div className="flex h-full min-h-0 w-full flex-col gap-1 overflow-hidden px-1 py-1">
@@ -292,13 +400,19 @@ const ClipInner: React.FC<ClipProps> = ({ clip, mediaAsset, pixelsPerSecond, sel
       {/* Right trim handle */}
       <div
         data-testid={`clip-${clip.id}-resize-right`}
-        className={`absolute right-0 top-0 w-3 h-full cursor-ew-resize z-20 ${showResizeHandles ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"} ${isResizing === "right" ? (resizeStart?.isRipple ? "bg-yellow-300/60" : "bg-cyan-300/60") : "bg-transparent"}`}
-        onMouseDown={(e) => {
+        className={`absolute right-0 top-0 w-4 h-full z-30 ${showResizeHandles ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"} ${isResizing === "right" ? (resizeStart?.isRipple ? "bg-yellow-300/60" : "bg-cyan-300/60") : "bg-white/25 hover:bg-white/35"} transition-colors`}
+        style={{ touchAction: "none", cursor: "col-resize" }}
+        onPointerDownCapture={(e) => {
+          e.stopPropagation();
+        }}
+        onPointerDown={(e) => {
           e.stopPropagation(); // Prevent drag when clicking resize handle
           handleResizeStart(e, "right");
         }}
         title={rippleEditEnabled ? "Ripple trim (ripple mode ON)" : "Hold Shift for ripple trim"}
-      />
+      >
+        <div className="absolute right-[5px] top-1/2 h-5 w-[2px] -translate-y-1/2 rounded bg-white/90" />
+      </div>
     </div>
   );
 };

@@ -24,7 +24,7 @@ import { useHistoryStore } from "@/store/historyStore";
 import { useTimelineStore } from "@/store/timelineStore";
 import { getPlaybackClock } from "@/hooks/usePlaybackClock";
 import { useUIStore } from "@/store/uiStore";
-import { SplitClipCommand } from "../history/commands";
+import { SplitClipCommand, UpdateClipCommand } from "../history/commands";
 import type { Clip } from "@/types";
 
 /**
@@ -48,6 +48,12 @@ export interface SplitResult {
   error?: string;
   leftClipId?: string;
   rightClipId?: string;
+}
+
+export interface TrimAtPlayheadResult {
+  success: boolean;
+  clipId: string;
+  error?: string;
 }
 
 /**
@@ -108,6 +114,12 @@ export class EditingActions {
       const newState = useTimelineStore.getState();
       const leftClip = newState.clips.find((c) => c.id === clipId);
       const rightClip = newState.clips.find((c) => c.trackId === clip.trackId && c.startTime === time && c.mediaId === clip.mediaId);
+
+      // NLE-standard ergonomics: after split, select the right-hand clip
+      // so repeated cuts can continue forward quickly.
+      if (rightClip?.id) {
+        useUIStore.getState().selectClip(rightClip.id);
+      }
 
       return {
         success: true,
@@ -172,6 +184,123 @@ export class EditingActions {
         source: "playhead",
       }),
     );
+  }
+
+  /**
+   * Split all clips crossing the current playhead.
+   * This ignores selection and applies globally across unlocked tracks.
+   */
+  static splitAllAtPlayhead(): SplitResult[] {
+    const currentTime = getPlaybackClock().time;
+    const clips = useTimelineStore.getState().clips;
+    const tracks = useTimelineStore.getState().tracks;
+
+    const unlockedTrackIds = new Set(tracks.filter((t) => !t.locked).map((t) => t.id));
+    const clipsUnderPlayhead = clips.filter((clip) => {
+      const clipEndTime = clip.startTime + clip.duration;
+      return unlockedTrackIds.has(clip.trackId) && currentTime > clip.startTime && currentTime < clipEndTime;
+    });
+
+    return clipsUnderPlayhead.map((clip) =>
+      this.executeSplit({
+        clipId: clip.id,
+        time: currentTime,
+        source: "playhead",
+      }),
+    );
+  }
+
+  /**
+   * Delete/trim left side up to playhead for selected clips
+   * (or clips under playhead when nothing is selected).
+   */
+  static deleteLeftAtPlayhead(): TrimAtPlayheadResult[] {
+    return this.trimAtPlayhead("left");
+  }
+
+  /**
+   * Delete/trim right side from playhead for selected clips
+   * (or clips under playhead when nothing is selected).
+   */
+  static deleteRightAtPlayhead(): TrimAtPlayheadResult[] {
+    return this.trimAtPlayhead("right");
+  }
+
+  private static trimAtPlayhead(side: "left" | "right"): TrimAtPlayheadResult[] {
+    const currentTime = getPlaybackClock().time;
+    const timelineState = useTimelineStore.getState();
+    const selectedClipIds = useUIStore.getState().selectedClipIds;
+    const lockedTrackIds = new Set(timelineState.tracks.filter((t) => t.locked).map((t) => t.id));
+
+    const selectedSet = new Set(selectedClipIds);
+    const candidates = (selectedClipIds.length > 0 ? timelineState.clips.filter((c) => selectedSet.has(c.id)) : timelineState.clips.filter((clip) => currentTime > clip.startTime && currentTime < clip.startTime + clip.duration)).filter((clip) => !lockedTrackIds.has(clip.trackId));
+
+    if (candidates.length === 0) return [];
+
+    const history = useHistoryStore.getState();
+    history.beginTransaction(side === "left" ? "Delete Left at Playhead" : "Delete Right at Playhead");
+    const results: TrimAtPlayheadResult[] = [];
+
+    try {
+      for (const clip of candidates) {
+        const clipEnd = clip.startTime + clip.duration;
+        if (currentTime <= clip.startTime || currentTime >= clipEnd) {
+          continue;
+        }
+
+        if (side === "left") {
+          const newStartTime = currentTime;
+          const consumedDuration = newStartTime - clip.startTime;
+          const newTrimIn = clip.trimIn + consumedDuration;
+          const newDuration = clipEnd - newStartTime;
+          const newProperties = {
+            startTime: newStartTime,
+            trimIn: newTrimIn,
+            duration: newDuration,
+          };
+
+          history.execute(
+            new UpdateClipCommand(clip.id, {
+              startTime: clip.startTime,
+              trimIn: clip.trimIn,
+              duration: clip.duration,
+            }, newProperties),
+          );
+        } else {
+          const newTrimOut = clip.trimIn + (currentTime - clip.startTime);
+          const newDuration = currentTime - clip.startTime;
+          const newProperties = {
+            trimOut: newTrimOut,
+            duration: newDuration,
+          };
+
+          history.execute(
+            new UpdateClipCommand(clip.id, {
+              trimOut: clip.trimOut,
+              duration: clip.duration,
+            }, newProperties),
+          );
+        }
+
+        results.push({ success: true, clipId: clip.id });
+      }
+
+      if (results.length === 0) {
+        history.rollbackTransaction();
+        return [];
+      }
+
+      history.commitTransaction();
+      return results;
+    } catch (error) {
+      history.rollbackTransaction();
+      const message = error instanceof Error ? error.message : "Unknown trim error";
+      return candidates.map((clip) => ({
+        success: false,
+        clipId: clip.id,
+        error: message,
+      }));
+    }
   }
 
   /**

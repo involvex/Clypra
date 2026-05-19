@@ -153,14 +153,15 @@ export class PreviewMediaPool {
       }
     }
 
-    // Pick one primary video clip for audible playback (prevents overlapping voices)
-    const visibleVideoClips = clips.filter((clip) => {
+    // Pick one primary ACTIVE video clip for audible playback (prevents overlapping voices)
+    const activeVisibleVideoClips = clips.filter((clip) => {
       const asset = assets.find((a) => a.id === clip.mediaId);
       if (!asset || asset.type !== "video") return false;
       const track = this.trackMap.get(clip.trackId);
-      return track?.visible !== false;
+      if (track?.visible === false) return false;
+      return getClipSourceTime(clip, syncState.time) !== null;
     });
-    const primaryVideoClip = findPrimaryVideoClip(visibleVideoClips, tracks);
+    const primaryVideoClip = findPrimaryVideoClip(activeVisibleVideoClips, tracks);
 
     // Create or update video elements
     for (const clip of clips) {

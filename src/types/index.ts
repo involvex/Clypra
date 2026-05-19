@@ -96,6 +96,13 @@ export interface MediaAsset {
   height?: number;
   posterFrame?: string;
   coverArt?: string; // Album artwork for audio files
+  /** Optional non-destructive visual content bounds inside the raster source. */
+  contentBounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
   size: number;
 }
 
@@ -116,6 +123,8 @@ export interface Clip {
   // Transform constraints
   aspectRatioLocked?: boolean; // Default true for video/images
   sourceAspectRatio?: number; // Original aspect ratio (width/height)
+  /** Placement fit mode used for deterministic reset/re-fit behavior. */
+  fitMode?: "contain" | "cover" | "fill" | "stretch" | "original";
 }
 
 export interface TextClip extends Clip {

@@ -3,18 +3,21 @@ import { useProjectStore } from '../store/projectStore'
 import type { Clip, MediaAsset } from '../types'
 import { createClipFromAsset } from '../lib/timelineClip'
 import { autoAdaptSequenceForFirstVisualClip } from '../lib/sequenceAutoAspect'
+import { DEFAULT_PLACEMENT_POLICY } from '../lib/placementPolicy'
 
 export const useTimeline = () => {
   const { tracks, clips, zoomLevel, scrollLeft, pixelsPerSecond, addClip, removeClip, updateClip, moveClip, setZoom, setScrollLeft } = useTimelineStore()
   const { mediaAssets, project, updateProject } = useProjectStore()
 
   const addClipFromAsset = (asset: MediaAsset, trackId: string, startTime: number) => {
-    autoAdaptSequenceForFirstVisualClip({
-      project,
-      existingClips: clips,
-      asset,
-      updateProject,
-    })
+    if (DEFAULT_PLACEMENT_POLICY.autoAdaptSequenceForFirstVisualClip) {
+      autoAdaptSequenceForFirstVisualClip({
+        project,
+        existingClips: clips,
+        asset,
+        updateProject,
+      })
+    }
     const nextProject = useProjectStore.getState().project
 
     const clip: Clip = createClipFromAsset({

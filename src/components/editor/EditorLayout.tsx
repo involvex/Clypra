@@ -9,6 +9,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { createClipFromAsset } from "@/lib/timelineClip";
 import { createTextClip, TEXT_PRESETS } from "@/lib/textClip";
 import { autoAdaptSequenceForFirstVisualClip } from "@/lib/sequenceAutoAspect";
+import { DEFAULT_PLACEMENT_POLICY, resolveClipStartTime, resolvePreferredTrackId, resolveTargetTrackType } from "@/lib/placementPolicy";
 
 export const EditorLayout: React.FC = () => {
   const { tracks, clips, addClip, addTrack, getTimelineEndTime } = useTimelineStore();
@@ -20,37 +21,37 @@ export const EditorLayout: React.FC = () => {
       const mediaAsset = mediaAssets.find((asset) => asset.id === item.id);
       if (!mediaAsset) return;
 
-      // Determine the appropriate track type based on media type
-      const targetTrackType = mediaAsset.type === "audio" ? "audio" : "video";
-
-      // Find the first track of the appropriate type
-      let targetTrack = tracks.find((track) => track.type === targetTrackType && !track.locked);
+      const targetTrackType = resolveTargetTrackType(mediaAsset);
+      let targetTrackId = resolvePreferredTrackId({ tracks, asset: mediaAsset });
 
       // If no track exists for this type, create one
-      if (!targetTrack) {
+      if (!targetTrackId) {
         addTrack(targetTrackType);
-        // Get the newly created track
-        targetTrack = useTimelineStore.getState().tracks.find((t) => t.type === targetTrackType && !t.locked);
+        targetTrackId = resolvePreferredTrackId({ tracks: useTimelineStore.getState().tracks, asset: mediaAsset });
       }
 
-      if (!targetTrack) return;
+      if (!targetTrackId) return;
 
-      // Get the end time of all existing clips
-      const endTime = getTimelineEndTime();
-
-      autoAdaptSequenceForFirstVisualClip({
-        project,
-        existingClips: clips,
-        asset: mediaAsset,
-        updateProject,
+      const startTime = resolveClipStartTime({
+        intent: "timeline_end",
+        timelineEndTime: getTimelineEndTime(),
       });
+
+      if (DEFAULT_PLACEMENT_POLICY.autoAdaptSequenceForFirstVisualClip) {
+        autoAdaptSequenceForFirstVisualClip({
+          project,
+          existingClips: clips,
+          asset: mediaAsset,
+          updateProject,
+        });
+      }
 
       const nextProject = useProjectStore.getState().project;
 
       const newClip = createClipFromAsset({
         asset: mediaAsset,
-        trackId: targetTrack.id,
-        startTime: endTime,
+        trackId: targetTrackId,
+        startTime,
         width: nextProject?.canvasWidth || project?.canvasWidth || 1920,
         height: nextProject?.canvasHeight || project?.canvasHeight || 1080,
       });

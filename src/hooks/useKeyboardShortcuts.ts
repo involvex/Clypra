@@ -133,7 +133,7 @@ export const useKeyboardShortcuts = () => {
         setTimeout(() => setToastMessage(null), 2000);
       } else if (e.key === "s" && !isMeta) {
         e.preventDefault();
-        const results = EditingActions.splitAtPlayhead();
+        const results = EditingActions.splitAllAtPlayhead();
 
         if (results.length === 0) {
           setToastMessage("No clips under playhead to split");
@@ -146,6 +146,26 @@ export const useKeyboardShortcuts = () => {
           } else if (failCount > 0) {
             setToastMessage(results[0].error || "Split failed");
           }
+        }
+        setTimeout(() => setToastMessage(null), 2000);
+      } else if (e.key.toLowerCase() === "q" && !isMeta) {
+        e.preventDefault();
+        const results = EditingActions.deleteLeftAtPlayhead();
+        if (results.length === 0) {
+          setToastMessage("No clips to delete left at playhead");
+        } else {
+          const successCount = results.filter((r) => r.success).length;
+          setToastMessage(`Delete left applied to ${successCount} clip${successCount > 1 ? "s" : ""}`);
+        }
+        setTimeout(() => setToastMessage(null), 2000);
+      } else if (e.key.toLowerCase() === "w" && !isMeta) {
+        e.preventDefault();
+        const results = EditingActions.deleteRightAtPlayhead();
+        if (results.length === 0) {
+          setToastMessage("No clips to delete right at playhead");
+        } else {
+          const successCount = results.filter((r) => r.success).length;
+          setToastMessage(`Delete right applied to ${successCount} clip${successCount > 1 ? "s" : ""}`);
         }
         setTimeout(() => setToastMessage(null), 2000);
       }

@@ -11,6 +11,7 @@ import { capitalize } from "./utils";
 import { DensityLevel as DensityLevelEnum } from "../types";
 import { createClipFromAsset } from "./timelineClip";
 import { autoAdaptSequenceForFirstVisualClip } from "./sequenceAutoAspect";
+import { DEFAULT_PLACEMENT_POLICY, resolveClipStartTime } from "./placementPolicy";
 import { generateId } from "@/lib/id";
 
 // Density configurations mapping zoom levels to extraction densities. Each configuration defines the time interval between thumbnails and the zoom range.
@@ -79,7 +80,8 @@ export function handleCreateTrackAndDrop(item: DragItem, monitor: any, insertInd
   const offset = monitor.getClientOffset();
   const containerRect = document.getElementById("timeline-tracks-container")?.getBoundingClientRect();
 
-  const startTime = offset && containerRect ? Math.max(0, (offset.x - containerRect.left + scrollLeft) / pixelsPerSecond) : 0;
+  const dropTime = offset && containerRect ? (offset.x - containerRect.left + scrollLeft) / pixelsPerSecond : 0;
+  const startTime = resolveClipStartTime({ intent: "drop", timelineEndTime: 0, dropTime });
 
   // Infer track type from what's being dropped
   const trackType: "video" | "audio" | "text" = item.type === "MEDIA_ASSET" ? (item.asset.type === "audio" ? "audio" : "video") : "video";
@@ -101,12 +103,14 @@ export function handleCreateTrackAndDrop(item: DragItem, monitor: any, insertInd
 
   if (item.type === "MEDIA_ASSET") {
     const projectState = useProjectStore.getState();
-    autoAdaptSequenceForFirstVisualClip({
-      project: projectState.project,
-      existingClips: useTimelineStore.getState().clips,
-      asset: item.asset,
-      updateProject: projectState.updateProject,
-    });
+    if (DEFAULT_PLACEMENT_POLICY.autoAdaptSequenceForFirstVisualClip) {
+      autoAdaptSequenceForFirstVisualClip({
+        project: projectState.project,
+        existingClips: useTimelineStore.getState().clips,
+        asset: item.asset,
+        updateProject: projectState.updateProject,
+      });
+    }
 
     const nextProject = useProjectStore.getState().project;
     const canvasWidth = nextProject?.canvasWidth ?? projectState.project?.canvasWidth ?? 1920;
@@ -138,16 +142,19 @@ export function handleDropOnTrack(item: DragItem, monitor: any, trackId: string)
   const offset = monitor.getClientOffset();
   const containerRect = document.getElementById("timeline-tracks-container")?.getBoundingClientRect();
 
-  const startTime = offset && containerRect ? Math.max(0, (offset.x - containerRect.left + scrollLeft) / pixelsPerSecond) : 0;
+  const dropTime = offset && containerRect ? (offset.x - containerRect.left + scrollLeft) / pixelsPerSecond : 0;
+  const startTime = resolveClipStartTime({ intent: "drop", timelineEndTime: 0, dropTime });
 
   if (item.type === "MEDIA_ASSET") {
     const projectState = useProjectStore.getState();
-    autoAdaptSequenceForFirstVisualClip({
-      project: projectState.project,
-      existingClips: useTimelineStore.getState().clips,
-      asset: item.asset,
-      updateProject: projectState.updateProject,
-    });
+    if (DEFAULT_PLACEMENT_POLICY.autoAdaptSequenceForFirstVisualClip) {
+      autoAdaptSequenceForFirstVisualClip({
+        project: projectState.project,
+        existingClips: useTimelineStore.getState().clips,
+        asset: item.asset,
+        updateProject: projectState.updateProject,
+      });
+    }
 
     const nextProject = useProjectStore.getState().project;
     const canvasWidth = nextProject?.canvasWidth ?? projectState.project?.canvasWidth ?? 1920;

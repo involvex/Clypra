@@ -7,6 +7,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { createClipFromAsset } from "@/lib/timelineClip";
 import { getActiveSessionOrNull } from "@/core/runtime/ProjectSession";
 import { autoAdaptSequenceForFirstVisualClip } from "@/lib/sequenceAutoAspect";
+import { DEFAULT_PLACEMENT_POLICY, resolveClipStartTime, resolvePreferredTrackId, resolveTargetTrackType } from "@/lib/placementPolicy";
 import type { SourcePlaybackContext } from "@/core/playback";
 import { GPUPreview } from "./GPUPreview";
 import { AudioWaveform } from "./AudioWaveform";
@@ -111,27 +112,33 @@ export const SourcePreview: React.FC = () => {
 
   const handleAddToTimeline = () => {
     if (!project) return;
-    const targetTrackType = sourceAsset.type === "audio" ? "audio" : "video";
-    let targetTrack = tracks.find((track) => track.type === targetTrackType && !track.locked);
-    if (!targetTrack) {
+    const targetTrackType = resolveTargetTrackType(sourceAsset);
+    let targetTrackId = resolvePreferredTrackId({ tracks, asset: sourceAsset });
+    if (!targetTrackId) {
       addTrack(targetTrackType);
-      targetTrack = useTimelineStore.getState().tracks.find((t) => t.type === targetTrackType && !t.locked);
+      targetTrackId = resolvePreferredTrackId({ tracks: useTimelineStore.getState().tracks, asset: sourceAsset });
     }
-    if (!targetTrack) return;
+    if (!targetTrackId) return;
 
-    autoAdaptSequenceForFirstVisualClip({
-      project,
-      existingClips: clips,
-      asset: sourceAsset,
-      updateProject,
-    });
+    if (DEFAULT_PLACEMENT_POLICY.autoAdaptSequenceForFirstVisualClip) {
+      autoAdaptSequenceForFirstVisualClip({
+        project,
+        existingClips: clips,
+        asset: sourceAsset,
+        updateProject,
+      });
+    }
     const nextProject = useProjectStore.getState().project;
 
-    const trackClips = clips.filter((c) => c.trackId === targetTrack.id);
-    const startTime = trackClips.length > 0 ? Math.max(...trackClips.map((c) => c.startTime + c.duration)) : 0;
+    const trackClips = clips.filter((c) => c.trackId === targetTrackId);
+    const startTime = resolveClipStartTime({
+      intent: "track_end",
+      timelineEndTime: 0,
+      trackClips,
+    });
     const newClip = createClipFromAsset({
       asset: sourceAsset,
-      trackId: targetTrack.id,
+      trackId: targetTrackId,
       startTime,
       width: nextProject?.canvasWidth ?? project.canvasWidth,
       height: nextProject?.canvasHeight ?? project.canvasHeight,

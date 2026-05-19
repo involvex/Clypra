@@ -137,20 +137,23 @@ export const MediaTab: React.FC<MediaTabProps> = ({ onAddToTimeline }) => {
               ? {
                   label: "Remove from Timeline",
                   onClick: () => {
-                    const { removeClip, normalizeTrack } = useTimelineStore.getState();
+                    const { removeClip, normalizeTrack, removeEmptyNonMainTracks, withBatch } = useTimelineStore.getState();
                     const affectedTracks = new Set<string>();
 
                     // Find all clips using this media asset
                     const clipsToRemove = clips.filter((c) => c.mediaId === contextMenu.mediaId);
 
-                    // Remove all clips using this asset
-                    clipsToRemove.forEach((clip) => {
-                      affectedTracks.add(clip.trackId);
-                      removeClip(clip.id);
-                    });
+                    withBatch(() => {
+                      // Remove all clips using this asset
+                      clipsToRemove.forEach((clip) => {
+                        affectedTracks.add(clip.trackId);
+                        removeClip(clip.id);
+                      });
 
-                    // Normalize affected tracks to close gaps
-                    affectedTracks.forEach((trackId) => normalizeTrack(trackId));
+                      // Normalize affected tracks to close gaps
+                      affectedTracks.forEach((trackId) => normalizeTrack(trackId));
+                      removeEmptyNonMainTracks(Array.from(affectedTracks));
+                    });
                   },
                 }
               : {

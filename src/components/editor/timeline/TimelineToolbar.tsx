@@ -1,23 +1,24 @@
 import React, { useRef, useState } from "react";
-import { Plus, MousePointer2, Scissors, Magnet, Link2, Mic, Search, ZoomIn, ZoomOut, ArrowLeftRight, Waves, Undo2, Redo2 } from "lucide-react";
+import { Plus, MousePointer2, Scissors, Magnet, Link2, Mic, Search, ZoomIn, ZoomOut, ArrowLeftRight, Waves, Undo2, Redo2, ScissorsLineDashed, ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/Tooltip";
 import { useTimelineStore } from "@/store/timelineStore";
 import { useUIStore } from "@/store/uiStore";
-import { useSettingsStore } from "@/store/settingsStore";
+// import { useSettingsStore } from "@/store/settingsStore";
 import { useHistoryStore } from "@/store/historyStore";
 import { SuccessToast } from "@/components/ui/SuccessToast";
 import { DEFAULT_SRP_CONFIG, SpatialTier } from "@/lib/renderEngine/types";
 import { clampTimelineZoom, formatCadenceSeconds, getSrpTierForZoom, getTimelineTemporalDetail, getZoomFromRatio, getZoomRatio, snapTimelineZoomToTierAnchors, TIMELINE_TIER_LABELS, TIMELINE_ZOOM_MAX, TIMELINE_ZOOM_MIN, TIMELINE_ZOOM_STEP } from "@/lib/timelineZoom";
 import { useSplitMode } from "@/hooks/useSplitMode";
+import { EditingActions } from "@/core/interactions";
 
 export const TimelineToolbar: React.FC = () => {
   const { zoomLevel, pixelsPerSecond, setZoom, addTrack, swapClips, rippleEditEnabled, toggleRippleEdit } = useTimelineStore();
-  const { selectedClipIds } = useUIStore();
-  const { snapToGrid, setSnapToGrid } = useSettingsStore();
+  const { selectedClipIds, clearSelection } = useUIStore();
+  // const { snapToGrid, setSnapToGrid } = useSettingsStore();
   const { state: historyState, undo, redo } = useHistoryStore();
   const [splitMode, setSplitMode] = useState(false);
-  const [linkMode, setLinkMode] = useState(true);
+  // const [linkMode, setLinkMode] = useState(true);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const zoomRailRef = useRef<HTMLDivElement>(null);
 
@@ -93,7 +94,7 @@ export const TimelineToolbar: React.FC = () => {
     }
   };
 
-  const toolButton = "text-text-muted hover:text-text-primary hover:bg-surface-raised/80";
+  const toolButton = "text-text-muted hover:text-text-primary hover:bg-surface-raised/80 cursor-pointer";
   const activeButton = "bg-accent/15 text-accent-soft border-accent/40 hover:bg-accent/20";
   const zoomButton = "cursor-pointer h-8 w-8 rounded-full border border-accent/35 bg-surface-raised text-accent-soft shadow-[0_0_0_1px_rgba(0,0,0,0.28),0_6px_16px_rgba(0,0,0,0.22)] hover:border-accent/60 hover:bg-accent/15 hover:text-text-primary transition-colors";
 
@@ -111,26 +112,77 @@ export const TimelineToolbar: React.FC = () => {
     }
   };
 
+  const handleSplitAllAtPlayhead = () => {
+    const results = EditingActions.splitAllAtPlayhead();
+    if (results.length === 0) {
+      setToastMessage("No clips under playhead to split");
+    } else {
+      const successCount = results.filter((r) => r.success).length;
+      setToastMessage(`Split ${successCount} clip${successCount > 1 ? "s" : ""}`);
+    }
+    setTimeout(() => setToastMessage(null), 2000);
+  };
+
+  const handleDeleteLeftAtPlayhead = () => {
+    const results = EditingActions.deleteLeftAtPlayhead();
+    if (results.length === 0) {
+      setToastMessage("No clips to delete left at playhead");
+    } else {
+      const successCount = results.filter((r) => r.success).length;
+      setToastMessage(`Delete left applied to ${successCount} clip${successCount > 1 ? "s" : ""}`);
+    }
+    setTimeout(() => setToastMessage(null), 2000);
+  };
+
+  const handleDeleteRightAtPlayhead = () => {
+    const results = EditingActions.deleteRightAtPlayhead();
+    if (results.length === 0) {
+      setToastMessage("No clips to delete right at playhead");
+    } else {
+      const successCount = results.filter((r) => r.success).length;
+      setToastMessage(`Delete right applied to ${successCount} clip${successCount > 1 ? "s" : ""}`);
+    }
+    setTimeout(() => setToastMessage(null), 2000);
+  };
+
+  const handleDeleteSelectedClips = () => {
+    if (selectedClipIds.length === 0) return;
+
+    const { clips, removeClip, normalizeTrack, removeEmptyNonMainTracks, withBatch } = useTimelineStore.getState();
+    const affectedTracks = new Set<string>();
+
+    withBatch(() => {
+      selectedClipIds.forEach((clipId) => {
+        const clip = clips.find((c) => c.id === clipId);
+        if (!clip) return;
+        affectedTracks.add(clip.trackId);
+        removeClip(clipId);
+      });
+      affectedTracks.forEach((trackId) => normalizeTrack(trackId));
+      removeEmptyNonMainTracks(Array.from(affectedTracks));
+    });
+
+    clearSelection();
+    setToastMessage(`Deleted ${selectedClipIds.length} clip${selectedClipIds.length > 1 ? "s" : ""}`);
+    setTimeout(() => setToastMessage(null), 2000);
+  };
+
   return (
     <TooltipProvider>
-      <div data-timeline-interactive="true" className="h-12 border-b border-timeline-toolbar-border flex items-center px-3 gap-2">
+      <div data-timeline-interactive="true" className="border-b border-timeline-toolbar-border flex items-center p-1 gap-2">
         <div className="flex items-center gap-1">
           <Tool label="Undo (Cmd+Z)">
             <Button variant="ghost" size="icon-sm" className={toolButton} onClick={undo} disabled={!historyState.canUndo}>
               <Undo2 className="w-4 h-4" />
             </Button>
           </Tool>
+
           <Tool label="Redo (Cmd+Shift+Z)">
             <Button variant="ghost" size="icon-sm" className={toolButton} onClick={redo} disabled={!historyState.canRedo}>
               <Redo2 className="w-4 h-4" />
             </Button>
           </Tool>
-          <div className="w-px h-6 bg-timeline-toolbar-border mx-1" />
-          <Tool label="Add video track">
-            <Button variant="ghost" size="icon-sm" className={toolButton} onClick={() => addTrack("video")}>
-              <Plus className="w-4 h-4" />
-            </Button>
-          </Tool>
+
           {selectedClipIds.length === 2 && (
             <Tool label="Swap selected clips (Ctrl+Shift+S)">
               <Button variant="ghost" size="icon-sm" className={toolButton} onClick={handleSwapClick}>
@@ -138,29 +190,46 @@ export const TimelineToolbar: React.FC = () => {
               </Button>
             </Tool>
           )}
-          <Tool label="Select tool">
-            <Button variant="ghost" size="icon-sm" className={toolButton}>
-              <MousePointer2 className="w-4 h-4" />
+
+          <Tool label="Delete left at playhead (Q)">
+            <Button variant="ghost" size="icon-sm" className={toolButton} onClick={handleDeleteLeftAtPlayhead}>
+              <ChevronLeft className="w-4 h-4" />
             </Button>
           </Tool>
-          <Tool label="Cut tool (S)">
-            <Button variant="ghost" size="icon-sm" className={splitMode ? activeButton : toolButton} onClick={() => setSplitMode(!splitMode)}>
-              <Scissors className="w-4 h-4" />
+
+          <Tool label="Delete right at playhead (W)">
+            <Button variant="ghost" size="icon-sm" className={toolButton} onClick={handleDeleteRightAtPlayhead}>
+              <ChevronRight className="w-4 h-4" />
             </Button>
           </Tool>
-          <Tool label="Link clips">
+
+          <Tool label="Split all at playhead (S)">
+            <Button variant="ghost" size="icon-sm" className={toolButton} onClick={handleSplitAllAtPlayhead}>
+              <ScissorsLineDashed className="w-4 h-4" />
+            </Button>
+          </Tool>
+
+          {/* <Tool label="Link clips">
             <Button variant="ghost" size="icon-sm" className={linkMode ? activeButton : toolButton} onClick={() => setLinkMode(!linkMode)}>
               <Link2 className="w-4 h-4" />
             </Button>
-          </Tool>
-          <Tool label="Snap">
+          </Tool> */}
+
+          {/* <Tool label="Snap">
             <Button variant="ghost" size="icon-sm" className={snapToGrid ? activeButton : toolButton} onClick={() => setSnapToGrid(!snapToGrid)}>
               <Magnet className="w-4 h-4" />
             </Button>
-          </Tool>
+          </Tool> */}
+
           <Tool label="Ripple edit mode (R) - Hold Shift while trimming">
             <Button variant="ghost" size="icon-sm" className={rippleEditEnabled ? activeButton : toolButton} onClick={toggleRippleEdit}>
               <Waves className="w-4 h-4" />
+            </Button>
+          </Tool>
+
+          <Tool label="Delete selected clip(s)">
+            <Button variant="ghost" size="icon-sm" className={toolButton} onClick={handleDeleteSelectedClips} disabled={selectedClipIds.length === 0}>
+              <Trash2 className="w-4 h-4" />
             </Button>
           </Tool>
         </div>

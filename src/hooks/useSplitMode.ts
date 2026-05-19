@@ -28,19 +28,74 @@ export const useSplitMode = ({ enabled, onSplit, onMessage }: UseSplitModeOption
   useEffect(() => {
     if (!enabled) return;
 
-    const handleClick = (e: MouseEvent) => {
-      // Check if clicking on a clip
-      const target = e.target as HTMLElement;
-      const clipElement = target.closest("[data-clip-id]");
+    const container = document.getElementById("timeline-tracks-container");
+    if (!container) return;
+
+    let activePreviewClip: HTMLElement | null = null;
+    let previewLine: HTMLDivElement | null = null;
+
+    const removePreview = () => {
+      if (previewLine?.parentElement) {
+        previewLine.parentElement.removeChild(previewLine);
+      }
+      previewLine = null;
+      activePreviewClip = null;
+    };
+
+    const ensurePreview = (clipElement: HTMLElement) => {
+      if (activePreviewClip === clipElement && previewLine) return;
+      removePreview();
+      activePreviewClip = clipElement;
+      previewLine = document.createElement("div");
+      previewLine.setAttribute("data-split-preview-line", "true");
+      previewLine.style.position = "absolute";
+      previewLine.style.top = "0";
+      previewLine.style.bottom = "0";
+      previewLine.style.width = "1px";
+      previewLine.style.background = "var(--color-accent)";
+      previewLine.style.boxShadow = "0 0 0 1px rgba(0,0,0,0.35)";
+      previewLine.style.pointerEvents = "none";
+      previewLine.style.zIndex = "80";
+      clipElement.appendChild(previewLine);
+    };
+
+    const updatePreviewPosition = (clipElement: HTMLElement, clientX: number) => {
+      ensurePreview(clipElement);
+      if (!previewLine) return;
+      const rect = clipElement.getBoundingClientRect();
+      const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+      previewLine.style.left = `${x}px`;
+    };
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      const clipElement = target?.closest("[data-clip-id]") as HTMLElement | null;
+      if (!clipElement || !container.contains(clipElement)) {
+        removePreview();
+        return;
+      }
+      updatePreviewPosition(clipElement, e.clientX);
+    };
+
+    const handlePointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const clipElement = target.closest("[data-clip-id]") as HTMLElement | null;
 
       if (!clipElement) return;
+      if (!container.contains(clipElement)) return;
+      if (target.closest('[data-testid*="resize"]')) return;
 
       const clipId = clipElement.getAttribute("data-clip-id");
       if (!clipId) return;
 
+      e.preventDefault();
+      e.stopPropagation();
+
       // Calculate click position in timeline time
       const rect = clipElement.getBoundingClientRect();
-      const clickX = e.clientX - rect.left;
+      const clickX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
       const clipWidth = rect.width;
 
       // Get clip data to calculate time
@@ -69,21 +124,25 @@ export const useSplitMode = ({ enabled, onSplit, onMessage }: UseSplitModeOption
       }
     };
 
-    // Add click listener
-    document.addEventListener("click", handleClick);
+    // Timeline-scoped pointer listeners in capture phase so razor takes priority
+    // over clip drag/select handlers while tool is active.
+    container.addEventListener("pointermove", handlePointerMove, true);
+    container.addEventListener("pointerdown", handlePointerDown, true);
 
     // Change cursor when hovering over clips
     const style = document.createElement("style");
     style.id = "split-mode-cursor";
     style.textContent = `
-      [data-clip-id] {
+      #timeline-tracks-container [data-clip-id] {
         cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M6 6l12 12M6 18L18 6"/></svg>') 12 12, crosshair !important;
       }
     `;
     document.head.appendChild(style);
 
     return () => {
-      document.removeEventListener("click", handleClick);
+      container.removeEventListener("pointermove", handlePointerMove, true);
+      container.removeEventListener("pointerdown", handlePointerDown, true);
+      removePreview();
       const styleElement = document.getElementById("split-mode-cursor");
       if (styleElement) {
         styleElement.remove();
