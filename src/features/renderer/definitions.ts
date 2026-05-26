@@ -26,12 +26,33 @@ export const glowYellowSparkles: TextEffectDefinition = {
   ],
   sparkles: {
     enabled: true,
-    count: 25,
-    minSize: 2,
-    maxSize: 6,
+    count: 35,
+    minSize: 1,
+    maxSize: 4,
     color: "#FFFFFF",
-    opacity: 0.9,
-    spread: 1.5,
+    opacity: 0.85,
+    spread: 1.2,
+  },
+};
+
+export const neonYellowOutline: TextEffectDefinition = {
+  id: "neon-yellow-outline",
+  name: "Neon Yellow Outline",
+  category: "neon",
+  description: "High-impact neon outline with a white letter body, crisp black stroke, and radiating yellow bloom glow.",
+  tags: ["neon", "yellow", "outline", "glow", "dark", "bold"],
+  font: { family: "Geist Variable", weight: 900, style: "normal", letterSpacing: 0, lineHeight: 1 },
+  fills: [],
+  strokes: [],
+  shadows: [],
+  neonYellowOutline: {
+    enabled: true,
+    glowColor: "#FFFF00",
+    glowTightBlur: 8,
+    glowWideBlur: 22,
+    strokeColor: "#000000",
+    strokeWidth: 5.5,
+    fillColor: "#FFFFFF",
   },
 };
 
@@ -228,27 +249,6 @@ export const classicInk: TextEffectDefinition = {
     strokeColor: "#53514a",
     shadowColor: "rgba(28, 26, 23, 0.82)",
     highlightIntensity: 0.15,
-  },
-};
-
-export const neonYellowOutline: TextEffectDefinition = {
-  id: "neon-yellow-outline",
-  name: "Neon Yellow Outline",
-  category: "neon",
-  description: "High-impact neon outline with a white letter body, crisp black stroke, and radiating yellow bloom glow.",
-  tags: ["neon", "yellow", "outline", "glow", "dark", "bold"],
-  font: { family: "Geist Variable", weight: 900, style: "normal", letterSpacing: 0, lineHeight: 1 },
-  fills: [],
-  strokes: [],
-  shadows: [],
-  neonYellowOutline: {
-    enabled: true,
-    glowColor: "#FFFF00",
-    glowTightBlur: 8,
-    glowWideBlur: 22,
-    strokeColor: "#000000",
-    strokeWidth: 5.5,
-    fillColor: "#FFFFFF",
   },
 };
 
