@@ -271,3 +271,12 @@ register(GlossyYellowBubbleGelDefinition, GlossyYellowBubbleGelEngine);
 
 import { RetroComicEngine, RetroComicDefinition } from "./effects/RetroComic";
 register(RetroComicDefinition, RetroComicEngine);
+
+import { EditorialVellumEngine, EditorialVellumDefinition } from "./effects/EditorialVellum";
+register(EditorialVellumDefinition, EditorialVellumEngine);
+
+import { CarbonShiftEngine, CarbonShiftDefinition } from "./effects/CarbonShift";
+register(CarbonShiftDefinition, CarbonShiftEngine);
+
+import { StealthContourEngine, StealthContourDefinition } from "./effects/StealthContour";
+register(StealthContourDefinition, StealthContourEngine);
