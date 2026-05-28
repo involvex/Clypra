@@ -304,3 +304,9 @@ register(InfraContourAestheticDefinition, InfraContourAestheticEngine);
 
 import { LumenBrimVividGradientEngine, LumenBrimVividGradientDefinition } from "./effects/LumenBrimVividGradient";
 register(LumenBrimVividGradientDefinition, LumenBrimVividGradientEngine);
+
+import { SolarisShiftClassicSolidBevelEngine, SolarisShiftClassicSolidBevelDefinition } from "./effects/SolarisShiftClassicSolidBevel";
+register(SolarisShiftClassicSolidBevelDefinition, SolarisShiftClassicSolidBevelEngine);
+
+import { AmberPunchVividGradientBevelEngine, AmberPunchVividGradientBevelDefinition } from "./effects/AmberPunchVividGradientBevel";
+register(AmberPunchVividGradientBevelDefinition, AmberPunchVividGradientBevelEngine);
