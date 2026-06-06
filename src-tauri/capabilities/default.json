@@ -12,39 +12,27 @@
     "fs:default",
     {
       "identifier": "fs:allow-read",
-      "allow": [
-        { "path": "$APPCACHE" },
-        { "path": "$APPCACHE/**/*" },
-        { "path": "$APPLOCALDATA" },
-        { "path": "$APPLOCALDATA/**/*" }
-      ]
+      "allow": [{ "path": "$APPCACHE" }, { "path": "$APPCACHE/**/*" }, { "path": "$APPLOCALDATA" }, { "path": "$APPLOCALDATA/**/*" }]
     },
     {
       "identifier": "fs:allow-write",
-      "allow": [
-        { "path": "$APPCACHE" },
-        { "path": "$APPCACHE/**/*" },
-        { "path": "$APPLOCALDATA" },
-        { "path": "$APPLOCALDATA/**/*" }
-      ]
+      "allow": [{ "path": "$APPCACHE" }, { "path": "$APPCACHE/**/*" }, { "path": "$APPLOCALDATA" }, { "path": "$APPLOCALDATA/**/*" }]
     },
     {
       "identifier": "fs:allow-exists",
-      "allow": [
-        { "path": "$APPCACHE" },
-        { "path": "$APPCACHE/**/*" },
-        { "path": "$APPLOCALDATA" },
-        { "path": "$APPLOCALDATA/**/*" }
-      ]
+      "allow": [{ "path": "$APPCACHE" }, { "path": "$APPCACHE/**/*" }, { "path": "$APPLOCALDATA" }, { "path": "$APPLOCALDATA/**/*" }]
     },
     {
       "identifier": "fs:allow-remove",
-      "allow": [
-        { "path": "$APPCACHE" },
-        { "path": "$APPCACHE/**/*" },
-        { "path": "$APPLOCALDATA" },
-        { "path": "$APPLOCALDATA/**/*" }
-      ]
+      "allow": [{ "path": "$APPCACHE" }, { "path": "$APPCACHE/**/*" }, { "path": "$APPLOCALDATA" }, { "path": "$APPLOCALDATA/**/*" }]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [{ "path": "$APPCACHE" }, { "path": "$APPCACHE/**/*" }, { "path": "$APPLOCALDATA" }, { "path": "$APPLOCALDATA/**/*" }]
+    },
+    {
+      "identifier": "fs:allow-read-dir",
+      "allow": [{ "path": "$APPCACHE" }, { "path": "$APPCACHE/**/*" }, { "path": "$APPLOCALDATA" }, { "path": "$APPLOCALDATA/**/*" }]
     }
   ]
 }
