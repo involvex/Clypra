@@ -37,6 +37,8 @@ import { resolveClipSourceTime } from "../timeline/sourceTime";
  * @param project - Project settings
  */
 export function evaluateTimelineScene(time: number, clips: Clip[], tracks: Track[], assets: MediaAsset[], project: Project | null, transitions: TransitionTimelineItem[] = []): EvaluatedScene {
+  console.log(`[evaluateTimelineScene] Called at time ${time} with ${clips.length} clips, ${tracks.length} tracks`);
+
   // Convert to compositor clips (adds roles, priorities)
   const compositorClips = toCompositorClips(clips, tracks);
 
@@ -329,7 +331,17 @@ export function evaluateTimelineSceneCached(time: number, clips: Clip[], tracks:
   const cacheKey = { time, epoch, clipVersion };
 
   const cached = cache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    console.log(`[evaluateTimelineSceneCached] CACHE HIT - ${cached.visualLayers.length} layers`);
+    return cached;
+  }
+
+  console.log(`[evaluateTimelineSceneCached] CACHE MISS - evaluating`);
+  const scene = evaluateTimelineScene(time, clips, tracks, assets, project, transitions);
+  cache.set(cacheKey, scene);
+  console.log(`[evaluateTimelineSceneCached] Created scene with ${scene.visualLayers.length} visual layers`);
+  return scene;
+}
 
   const scene = evaluateTimelineScene(time, clips, tracks, assets, project, transitions);
   cache.set(cacheKey, scene);
