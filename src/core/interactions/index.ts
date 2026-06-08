@@ -8,3 +8,5 @@
 export { TransformController, getTransformController, resetTransformController, type TransformListener } from "./TransformController";
 
 export { ViewportController, getViewportController, resetViewportController, type Viewport, type ViewportListener } from "./ViewportController";
+
+export { EditingActions } from "./EditingActions";

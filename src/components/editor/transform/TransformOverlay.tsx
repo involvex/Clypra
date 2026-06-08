@@ -16,6 +16,7 @@ import React, { useCallback, useRef, useState } from "react";
 import { useUIStore } from "@/store/uiStore";
 import { useTimelineStore } from "@/store/timelineStore";
 import { useHistoryStore } from "@/store/historyStore";
+import { getTransformController } from "@/core/interactions";
 import { TransformClipCommand } from "@/core/history/commands/TransformCommand";
 import { calculateTransform, getDefaultConstraints, getCursorForHandle } from "@/lib/transform/calculator";
 import { screenToCanvas, canvasToScreen, hitTestClip, type ViewportTransform } from "@/lib/coordinateSystem";
@@ -94,9 +95,13 @@ function mouseToCanvas(clientX: number, clientY: number, overlayRect: DOMRect, v
 }
 
 export const TransformOverlay: React.FC<TransformOverlayProps> = ({ canvasWidth, canvasHeight, scale, viewport, displayOffset, displayWidth, displayHeight, currentTime }) => {
-  const { selectedClipIds, activeTransform, startTransform, endTransform, selectClip, toggleClipSelection } = useUIStore();
+  const { selectedClipIds, selectClip, toggleClipSelection } = useUIStore();
   const { clips, tracks, updateClip } = useTimelineStore();
   const { execute } = useHistoryStore();
+
+  // Get transform controller for imperative updates
+  const transformController = getTransformController();
+  const activeTransform = transformController.getActiveTransform();
 
   const [isDragging, setIsDragging] = useState(false);
   const [snappedX, setSnappedX] = useState(false);
@@ -264,7 +269,7 @@ export const TransformOverlay: React.FC<TransformOverlayProps> = ({ canvasWidth,
         }
       }
 
-      startTransform({
+      transformController.startTransform({
         clipId: selectedClip.id,
         handle,
         startTransform: {
@@ -279,7 +284,7 @@ export const TransformOverlay: React.FC<TransformOverlayProps> = ({ canvasWidth,
         sourceAspectRatio: selectedClip.sourceAspectRatio ?? selectedClip.width / selectedClip.height,
       });
     },
-    [selectedClip, scale, viewport, canvasWidth, canvasHeight, startTransform],
+    [selectedClip, scale, viewport, canvasWidth, canvasHeight, transformController],
   );
 
   const handleMouseMove = useCallback(
@@ -384,11 +389,22 @@ export const TransformOverlay: React.FC<TransformOverlayProps> = ({ canvasWidth,
 
       traceSelect("transform mousemove", { clipId: activeTransform.clipId, handle: activeTransform.handle, x: newTransform.x, y: newTransform.y, width: newTransform.width, height: newTransform.height });
 
-      // Optimistic preview update - skip epoch increment to avoid cache thrashing
-      // The final mouseup will commit to history which properly increments epoch
+      // Update transform controller imperatively (no React re-render, no timeline store update)
+      // The overlay will read from controller for visual preview
+      // Only mouseup commits to timeline store + history
+      transformController.updateTransform({
+        ...activeTransform,
+        startTransform: {
+          ...activeTransform.startTransform,
+          ...newTransform,
+        },
+      });
+
+      // Optimistic preview: update clip for visual feedback during drag
+      // Skip epoch increment to avoid cache thrashing
       updateClip(activeTransform.clipId, { ...newTransform, _skipEpochIncrement: true } as any);
     },
-    [isDragging, activeTransform, scale, viewport, canvasWidth, canvasHeight, updateClip],
+    [isDragging, activeTransform, scale, viewport, canvasWidth, canvasHeight, updateClip, transformController],
   );
 
   const handleMouseUp = useCallback(() => {
@@ -411,7 +427,7 @@ export const TransformOverlay: React.FC<TransformOverlayProps> = ({ canvasWidth,
     // Read final clip state from store for history
     const finalClip = useTimelineStore.getState().clips.find((c) => c.id === activeTransform.clipId);
     if (!finalClip) {
-      endTransform();
+      transformController.endTransform();
       return;
     }
 
@@ -437,8 +453,8 @@ export const TransformOverlay: React.FC<TransformOverlayProps> = ({ canvasWidth,
       execute(new TransformClipCommand(activeTransform.clipId, oldTransform, newTransform));
     }
 
-    endTransform();
-  }, [isDragging, activeTransform, execute, endTransform, selectedClipIds]);
+    transformController.endTransform();
+  }, [isDragging, activeTransform, execute, selectedClipIds, transformController]);
 
   // Attach global mouse listeners during drag
   React.useEffect(() => {
