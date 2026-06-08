@@ -276,6 +276,7 @@ export const useTimelineStore = create<TimelineStore>(
 
     removeClip: (clipId) => {
       set((state) => {
+        const clipToRemove = state.clips.find((c) => c.id === clipId);
         const remainingClips = state.clips.filter((c) => c.id !== clipId);
 
         // If removing the last clip, reset playhead to 00:00
@@ -289,8 +290,21 @@ export const useTimelineStore = create<TimelineStore>(
           });
         }
 
+        // Check if the track this clip was on is now empty
+        let tracksToKeep = state.tracks;
+        if (clipToRemove) {
+          const trackId = clipToRemove.trackId;
+          const hasOtherClips = remainingClips.some((c) => c.trackId === trackId);
+
+          // If no other clips on this track, remove the track
+          if (!hasOtherClips) {
+            tracksToKeep = state.tracks.filter((t) => t.id !== trackId);
+          }
+        }
+
         const next: Partial<TimelineStore> = {
           clips: remainingClips,
+          tracks: tracksToKeep,
           transitions: state.transitions.filter((transition) => transition.fromItemId !== clipId && transition.toItemId !== clipId),
         };
         if (state._batchDepth > 0) {

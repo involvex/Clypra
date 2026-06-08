@@ -97,93 +97,101 @@ export class VideoElementPool {
     let pooledVideo: PooledVideo;
 
     if (existingVideo) {
-      // Reuse existing video at same position
       pooledVideo = existingVideo;
       pooledVideo.inUse = true;
-      return pooledVideo.element;
-    }
 
-    // Try to find an unused video for the same URL (will need to seek)
-    const sameUrlVideo = this.videos.find((v) => v.url === sourceUrl && !v.inUse);
+      // Exact match — already at target, return immediately
+      if (Math.abs(seekTime - pooledVideo.lastSeekTime) < 0.001) {
+        return pooledVideo.element;
+      }
 
-    if (sameUrlVideo) {
-      pooledVideo = sameUrlVideo;
-      pooledVideo.inUse = true;
+      // Sequential match — fall through to seek block below
+      // (seek will be cheap because decoder has frames in buffer)
     } else {
-      // Check if we've hit the concurrent limit
-      if (this.videos.length >= this.config.maxConcurrent) {
-        // Find and evict the oldest unused video
-        const unusedVideo = this.videos.find((v) => !v.inUse);
-        if (unusedVideo) {
-          this.releaseVideo(unusedVideo);
-        } else {
-          // All videos are in use - this shouldn't happen in sequential export
-          throw new Error(`VideoElementPool: maxConcurrent (${this.config.maxConcurrent}) limit reached with all videos in use`);
+      // Try to find an unused video for the same URL (will need to seek)
+      const sameUrlVideo = this.videos.find((v) => v.url === sourceUrl && !v.inUse);
+
+      if (sameUrlVideo) {
+        pooledVideo = sameUrlVideo;
+        pooledVideo.inUse = true;
+      } else {
+        // Check if we've hit the concurrent limit
+        if (this.videos.length >= this.config.maxConcurrent) {
+          // Find and evict the oldest unused video
+          const unusedVideo = this.videos.find((v) => !v.inUse);
+          if (unusedVideo) {
+            this.releaseVideo(unusedVideo);
+          } else {
+            // All videos are in use - this shouldn't happen in sequential export
+            throw new Error(`VideoElementPool: maxConcurrent (${this.config.maxConcurrent}) limit reached with all videos in use`);
+          }
         }
-      }
 
-      // Create new video element
-      const video = document.createElement("video");
-      video.preload = "auto";
-      video.muted = true; // Muted for export (no audio in frame extraction)
+        // Create new video element
+        const video = document.createElement("video");
+        video.preload = "auto";
+        video.muted = true; // Muted for export (no audio in frame extraction)
 
-      // Style and add to DOM to ensure the browser composites the frames
-      video.style.position = "fixed";
-      video.style.top = "0";
-      video.style.left = "0";
-      video.style.width = "256px";
-      video.style.height = "256px";
-      video.style.opacity = "0.001";
-      video.style.pointerEvents = "none";
-      video.style.zIndex = "-9999";
+        // Style and add to DOM to ensure the browser composites the frames
+        // Position off-screen and make completely invisible
+        video.style.position = "fixed";
+        video.style.top = "-9999px";
+        video.style.left = "-9999px";
+        video.style.width = "1px";
+        video.style.height = "1px";
+        video.style.opacity = "0";
+        video.style.pointerEvents = "none";
+        video.style.zIndex = "-9999";
+        video.style.visibility = "hidden";
 
-      // Ensure playsinline is set for Safari/mobile webviews
-      video.setAttribute("playsinline", "");
-      video.setAttribute("webkit-playsinline", "");
+        // Ensure playsinline is set for Safari/mobile webviews
+        video.setAttribute("playsinline", "");
+        video.setAttribute("webkit-playsinline", "");
 
-      if (typeof document !== "undefined" && document.body) {
-        document.body.appendChild(video);
-      }
+        if (typeof document !== "undefined" && document.body) {
+          document.body.appendChild(video);
+        }
 
-      video.src = sourceUrl;
+        video.src = sourceUrl;
 
-      pooledVideo = {
-        element: video,
-        url: sourceUrl,
-        lastSeekTime: -1,
-        inUse: true,
-      };
+        pooledVideo = {
+          element: video,
+          url: sourceUrl,
+          lastSeekTime: -1,
+          inUse: true,
+        };
 
-      this.videos.push(pooledVideo);
+        this.videos.push(pooledVideo);
 
-      // Wait for metadata to load
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            reject(new Error(`Video metadata load timeout: ${sourceUrl}`));
-          }, 10000);
+        // Wait for metadata to load
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              reject(new Error(`Video metadata load timeout: ${sourceUrl}`));
+            }, 10000);
 
-          video.addEventListener(
-            "loadedmetadata",
-            () => {
-              clearTimeout(timeout);
-              resolve();
-            },
-            { once: true },
-          );
+            video.addEventListener(
+              "loadedmetadata",
+              () => {
+                clearTimeout(timeout);
+                resolve();
+              },
+              { once: true },
+            );
 
-          video.addEventListener(
-            "error",
-            () => {
-              clearTimeout(timeout);
-              reject(new Error(`Video load error: ${sourceUrl}`));
-            },
-            { once: true },
-          );
-        });
-      } catch (error) {
-        this.releaseVideo(pooledVideo);
-        throw error;
+            video.addEventListener(
+              "error",
+              () => {
+                clearTimeout(timeout);
+                reject(new Error(`Video load error: ${sourceUrl}`));
+              },
+              { once: true },
+            );
+          });
+        } catch (error) {
+          this.releaseVideo(pooledVideo);
+          throw error;
+        }
       }
     }
 
@@ -198,8 +206,8 @@ export class VideoElementPool {
       return pooledVideo.element;
     }
 
-    // Need to seek
-    if (Math.abs(timeDelta) > OVERSHOOT_TOLERANCE_S) {
+    // Need to seek — fall through to existing seek logic
+    if (Math.abs(video.currentTime - seekTime) > 0.001) {
       try {
         // waits for frame to be compositor-ready
         await new Promise<void>((resolve, reject) => {
