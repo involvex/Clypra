@@ -25,7 +25,7 @@ export const EditorLayout: React.FC = () => {
     return <MobileEditorLayout />;
   }
 
-  const { tracks, clips, addClip, insertTrackAt, getTimelineEndTime, createTransitionBetweenClips } = useTimelineStore();
+  const { tracks, clips, addClip, updateClip, insertTrackAt, getTimelineEndTime, createTransitionBetweenClips } = useTimelineStore();
   const { mediaAssets, project, updateProject, addMediaAsset } = useProjectStore();
   const { selectedClipIds } = useUIStore();
 
@@ -289,8 +289,61 @@ export const EditorLayout: React.FC = () => {
       } else {
         useProjectStore.getState().showToast(`${item?.name || "Transition"} added`);
       }
-    } else {
-      // Handle other types (stickers, effects, captions)
+    } else if (type === "effects" || type === "filters") {
+      const selectedClipId = selectedClipIds[0] ?? null;
+      let targetClip = clips.find((c) => c.id === selectedClipId);
+
+      // If no clip is explicitly selected, find the active visual clip (video/image) at the playhead
+      if (!targetClip) {
+        const currentTime = getPlaybackClock().time;
+        const visualClips = clips.filter((c) => {
+          const asset = mediaAssets.find((a) => a.id === c.mediaId);
+          return asset && (asset.type === "video" || asset.type === "image");
+        });
+        targetClip = visualClips.find(
+          (c) => currentTime >= c.startTime && currentTime <= c.startTime + c.duration
+        );
+      }
+
+      if (!targetClip) {
+        useProjectStore.getState().showToast(
+          `Select a video or image clip to apply this ${type === "effects" ? "effect" : "filter"}`,
+          "warning"
+        );
+        return;
+      }
+
+      const asset = mediaAssets.find((a) => a.id === targetClip.mediaId);
+      if (asset?.type !== "video" && asset?.type !== "image") {
+        useProjectStore.getState().showToast(
+          "Effects and filters can only be applied to video or image clips",
+          "warning"
+        );
+        return;
+      }
+
+      if (type === "effects") {
+        const currentEffects = targetClip.effects || [];
+        const effectExists = currentEffects.some((fx) => fx.id === item.id);
+
+        if (effectExists) {
+          useProjectStore.getState().showToast(`Effect "${item.name}" is already applied`, "warning");
+          return;
+        }
+
+        const updatedEffects = [
+          ...currentEffects,
+          { id: item.id, name: item.name, intensity: 0.5 },
+        ];
+
+        updateClip(targetClip.id, { effects: updatedEffects });
+        useProjectStore.getState().showToast(`Applied ${item.name} effect`);
+      } else {
+        updateClip(targetClip.id, {
+          filter: { id: item.id, name: item.name, intensity: 0.8 },
+        });
+        useProjectStore.getState().showToast(`Applied ${item.name} filter`);
+      }
     }
   };
 

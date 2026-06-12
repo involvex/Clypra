@@ -112,6 +112,9 @@ export interface EvaluatedMediaLayer extends BaseVisualLayer {
 
   /** Source media rotation from container metadata (0, 90, 180, 270) */
   readonly sourceRotation?: number;
+
+  /** Active color filter on this layer */
+  readonly filter?: { id: string; name: string; intensity: number };
 }
 
 /**

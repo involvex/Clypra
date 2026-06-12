@@ -221,6 +221,12 @@ export function evaluateTimelineScene(time: number, clips: Clip[], tracks: Track
       transitionType: transitionState.type,
       transitionProgress: transitionState.progress,
       blendMode: (clip as any).blendMode || "normal",
+      effects: clip.effects?.map((fx) => ({
+        effectId: fx.id,
+        type: "video_effect",
+        parameters: { name: fx.name, intensity: fx.intensity },
+      })),
+      filter: clip.filter,
     };
 
     visualLayers.push(mediaLayer);

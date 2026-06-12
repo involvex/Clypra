@@ -142,6 +142,16 @@ export interface Clip {
   /** Audio volume (0.0 to 1.0, default 1.0) */
   volume?: number;
   kind?: ClipKind; // Optional for backward compatibility
+  effects?: Array<{
+    id: string;
+    name: string;
+    intensity: number; // 0.0 to 1.0
+  }>;
+  filter?: {
+    id: string;
+    name: string;
+    intensity: number; // 0.0 to 1.0
+  };
 }
 
 export interface VideoClip extends Clip {

@@ -10,6 +10,7 @@ export { TextStyleSection } from "./TextStyleSection";
 export { TransformSection } from "./TransformSection";
 export { AudioSection } from "./AudioSection";
 export { TextAnimationControls } from "./TextAnimationControls";
+export { EffectsFiltersSection } from "./EffectsFiltersSection";
 
 // Shared primitives
 export { PropertySlider } from "./primitives/PropertySlider";

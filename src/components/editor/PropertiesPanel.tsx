@@ -15,6 +15,7 @@ import { TextStyleSection } from "./properties/TextStyleSection";
 import { TransformSection } from "./properties/TransformSection";
 import { AudioSection } from "./properties/AudioSection";
 import { TextAnimationControls } from "./properties/TextAnimationControls";
+import { EffectsFiltersSection } from "./properties/EffectsFiltersSection";
 
 const TEXT_BOUNDS_STYLE_KEYS: (keyof TextClip)[] = ["text", "fontSize", "fontFamily", "fontWeight", "fontStyle", "styleId", "stroke", "shadow", "background", "letterSpacing", "lineHeight"];
 const MANUAL_BOUNDS_KEYS: (keyof Clip)[] = ["x", "y", "width", "height"];
@@ -247,6 +248,11 @@ export const PropertiesPanel: React.FC = () => {
             canvasWidth={canvasWidth}
             canvasHeight={canvasHeight}
           />
+        )}
+
+        {/* Effects and Filters */}
+        {isVisualClip && (
+          <EffectsFiltersSection selectedClip={selectedClip} handleUpdate={handleUpdate} />
         )}
       </div>
     </div>

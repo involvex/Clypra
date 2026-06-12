@@ -304,7 +304,7 @@ async function rasterizeMediaLayer(ctx: CanvasRenderingContext2D | OffscreenCanv
           cacheEntry.anim.goToAndStop(frame, true);
           await Promise.resolve();
           
-          drawMediaWithSourceRotation(ctx, cacheEntry.canvas, width, height, layer.sourceRotation);
+          drawMediaWithSourceRotation(ctx, cacheEntry.canvas, width, height, layer.sourceRotation, layer.effects, layer.filter);
           return;
         }
       }
@@ -319,7 +319,7 @@ async function rasterizeMediaLayer(ctx: CanvasRenderingContext2D | OffscreenCanv
         if (video.readyState >= 2) {
           // HAVE_CURRENT_DATA — element is loaded, draw it
           // Apply source rotation BEFORE drawing (critical for export)
-          drawMediaWithSourceRotation(ctx, video, width, height, layer.sourceRotation);
+          drawMediaWithSourceRotation(ctx, video, width, height, layer.sourceRotation, layer.effects, layer.filter);
           return;
         }
         // Element exists but still loading — draw silent placeholder (no error)
@@ -372,7 +372,7 @@ async function rasterizeMediaLayer(ctx: CanvasRenderingContext2D | OffscreenCanv
     }
 
     // Draw centered (after rotation transform) with source rotation applied
-    drawMediaWithSourceRotation(ctx, imageBitmap, width, height, layer.sourceRotation);
+    drawMediaWithSourceRotation(ctx, imageBitmap, width, height, layer.sourceRotation, layer.effects, layer.filter);
 
     // Only close if we created it (not from resource manager)
     if (!layer.resourceHandle && imageBitmap) {
@@ -429,29 +429,151 @@ function drawLoadingPlaceholder(ctx: CanvasRenderingContext2D | OffscreenCanvasR
  * @param height - Target height (layer height in canvas)
  * @param sourceRotation - Rotation from container metadata (0, 90, 180, 270)
  */
-function drawMediaWithSourceRotation(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, source: HTMLVideoElement | ImageBitmap | HTMLCanvasElement, width: number, height: number, sourceRotation?: number): void {
-  if (!sourceRotation || sourceRotation === 0) {
-    // No rotation - draw normally
-    ctx.drawImage(source, -width / 2, -height / 2, width, height);
-    return;
-  }
-
-  // Apply source rotation correction
-  // The context is already at the layer center (from rasterizeLayer)
-  // and has the user's clip rotation applied. Now we add source rotation.
+function drawMediaWithSourceRotation(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  source: HTMLVideoElement | ImageBitmap | HTMLCanvasElement,
+  width: number,
+  height: number,
+  sourceRotation?: number,
+  effects?: import("../evaluation/types").EvaluatedEffect[],
+  filter?: { id: string; name: string; intensity: number }
+): void {
   ctx.save();
 
-  // Rotate around the drawing origin (layer center)
-  ctx.rotate((sourceRotation * Math.PI) / 180);
+  // 1. Build and apply CSS filter string
+  let filterString = "";
+  if (filter) {
+    const { id, intensity } = filter;
+    if (id === "filter-sepia") {
+      filterString += `sepia(${intensity * 100}%)`;
+    } else if (id === "filter-retro") {
+      filterString += `sepia(${intensity * 50}%) saturate(${1 + intensity * 0.4}) contrast(${1 - intensity * 0.15})`;
+    } else if (id === "filter-vivid") {
+      filterString += `saturate(${1 + intensity * 1.2}) contrast(${1 + intensity * 0.25})`;
+    } else if (id === "filter-cool") {
+      filterString += `hue-rotate(${-intensity * 25}deg) saturate(${1 - intensity * 0.1})`;
+    } else if (id === "filter-cinematic-teal") {
+      filterString += `contrast(${1 + intensity * 0.15}) saturate(${1 - intensity * 0.1}) hue-rotate(5deg)`;
+    } else if (id === "filter-bw-classic") {
+      filterString += `grayscale(${intensity * 100}%)`;
+    }
+  }
 
-  // For 90° and 270° rotations, the source aspect ratio is transposed
-  // Example: source is 1280×720 encoded, but displays as 720×1280 portrait
-  // We need to draw at transposed dimensions so the rotated result fits correctly
+  // Check for CSS-based effects
+  let blurIntensity = 0;
+  if (effects && effects.length > 0) {
+    const blurFx = effects.find((fx) => fx.effectId === "fx-blur");
+    if (blurFx && blurFx.parameters) {
+      blurIntensity = blurFx.parameters.intensity ?? 0.5;
+      filterString += (filterString ? " " : "") + `blur(${blurIntensity * 20}px)`;
+    }
+  }
+
+  if (filterString) {
+    ctx.filter = filterString;
+  }
+
+  // 2. Resolve source dimensions & rotation transposition
   const isTransposed = sourceRotation === 90 || sourceRotation === 270;
   const drawWidth = isTransposed ? height : width;
   const drawHeight = isTransposed ? width : height;
 
-  ctx.drawImage(source, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+  if (sourceRotation && sourceRotation !== 0) {
+    ctx.rotate((sourceRotation * Math.PI) / 180);
+  }
+
+  // 3. Render pixelate or chromatic aberration or normal
+  const pixelateFx = effects?.find((fx) => fx.effectId === "fx-pixelate");
+  if (pixelateFx && pixelateFx.parameters && pixelateFx.parameters.intensity > 0.05) {
+    const intensity = pixelateFx.parameters.intensity;
+    // Calculate pixel scale factor
+    const scale = Math.max(0.02, 1 - intensity * 0.95);
+    const w = Math.max(4, Math.floor(drawWidth * scale));
+    const h = Math.max(4, Math.floor(drawHeight * scale));
+
+    // Create a temporary offscreen canvas
+    const tempCanvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(w, h) : document.createElement("canvas");
+
+    if (tempCanvas instanceof HTMLCanvasElement) {
+      tempCanvas.width = w;
+      tempCanvas.height = h;
+    }
+
+    const tempCtx = tempCanvas.getContext("2d") as any;
+    if (tempCtx) {
+      tempCtx.drawImage(source, 0, 0, w, h);
+
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      (ctx as any).mozImageSmoothingEnabled = false;
+      (ctx as any).webkitImageSmoothingEnabled = false;
+      (ctx as any).msImageSmoothingEnabled = false;
+
+      ctx.drawImage(tempCanvas as any, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+      ctx.restore();
+    } else {
+      ctx.drawImage(source, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+    }
+  } else {
+    // Check Chromatic Aberration
+    const chromaticFx = effects?.find((fx) => fx.effectId === "fx-chromatic");
+    if (chromaticFx && chromaticFx.parameters && chromaticFx.parameters.intensity > 0.05) {
+      const shift = chromaticFx.parameters.intensity * 8; // Max 8px shift
+
+      // Draw Red Channel shift
+      ctx.save();
+      ctx.globalAlpha = ctx.globalAlpha * 0.6;
+      ctx.translate(-shift, 0);
+      ctx.drawImage(source, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+      ctx.restore();
+
+      // Draw Cyan (Green/Blue) Channel shift
+      ctx.save();
+      ctx.globalAlpha = ctx.globalAlpha * 0.6;
+      ctx.translate(shift, 0);
+      ctx.globalCompositeOperation = "screen";
+      ctx.drawImage(source, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+      ctx.restore();
+    } else {
+      ctx.drawImage(source, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+    }
+  }
+
+  // 4. Draw overlays (Vignette, Film Grain)
+  if (effects && effects.length > 0) {
+    // Vignette Overlay
+    const vignetteFx = effects.find((fx) => fx.effectId === "fx-vignette");
+    if (vignetteFx && vignetteFx.parameters) {
+      ctx.save();
+      ctx.filter = "none"; // Clear filters for overlay drawing
+      const intensity = vignetteFx.parameters.intensity ?? 0.5;
+      const radius = Math.sqrt((drawWidth / 2) ** 2 + (drawHeight / 2) ** 2);
+      const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, radius);
+      grad.addColorStop(0, "transparent");
+      grad.addColorStop(0.5, `rgba(0, 0, 0, ${intensity * 0.25})`);
+      grad.addColorStop(1, `rgba(0, 0, 0, ${intensity * 0.95})`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(-drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+      ctx.restore();
+    }
+
+    // Film Grain Overlay
+    const grainFx = effects.find((fx) => fx.effectId === "fx-film-grain");
+    if (grainFx && grainFx.parameters) {
+      ctx.save();
+      ctx.filter = "none"; // Clear filters for overlay drawing
+      const intensity = grainFx.parameters.intensity ?? 0.5;
+      const dotsCount = Math.floor((drawWidth * drawHeight) / 100) * intensity;
+      for (let d = 0; d < dotsCount; d++) {
+        const rx = (Math.random() - 0.5) * drawWidth;
+        const ry = (Math.random() - 0.5) * drawHeight;
+        const rsize = 1 + Math.random() * 1.5;
+        ctx.fillStyle = Math.random() > 0.5 ? "rgba(255, 255, 255, 0.12)" : "rgba(0, 0, 0, 0.12)";
+        ctx.fillRect(rx, ry, rsize, rsize);
+      }
+      ctx.restore();
+    }
+  }
 
   ctx.restore();
 }
