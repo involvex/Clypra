@@ -1,15 +1,7 @@
-/**
- * Effect Picker Component
- * Displays a grid of video effects with categories
- * Follows the same design pattern as Text Effects and Stickers
- */
-
 import React, { useState, useEffect, useMemo } from "react";
-import { Search, Sparkles, Loader2, AlertCircle } from "lucide-react";
-import { useVideoEffectsStore } from "../store/videoEffectsStore";
+import { Search, Sparkles, AlertCircle } from "lucide-react";
 import type { EffectPreset } from "../types";
-
-const EFFECT_CATEGORIES = ["All", "Essentials", "Color", "Light", "Stylize", "Distort", "Blur", "Time"];
+import { useVideoEffectsStore } from "../store/videoEffectsStore";
 
 interface EffectPickerProps {
   onSelect: (effect: EffectPreset) => void;
@@ -19,59 +11,92 @@ export function EffectPicker({ onSelect }: EffectPickerProps) {
   const [activeCategory, setActiveCategory] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
 
-  const { effects, loading, error, fetchEffects } = useVideoEffectsStore();
+  const manifest = useVideoEffectsStore((state) => state.manifest);
+  const categories = useVideoEffectsStore((state) => state.categories);
+  const manifestLoading = useVideoEffectsStore((state) => state.manifestLoading);
+  const manifestError = useVideoEffectsStore((state) => state.manifestError);
+  const loadManifest = useVideoEffectsStore((state) => state.loadManifest);
+  const loadCategory = useVideoEffectsStore((state) => state.loadCategory);
+
+  useEffect(() => {
+    loadManifest().catch((err) => console.error("Failed to load manifest:", err));
+  }, [loadManifest]);
 
   useEffect(() => {
     if (activeCategory !== "All") {
-      fetchEffects(activeCategory.toLowerCase());
+      loadCategory("effect", activeCategory.toLowerCase()).catch((err) => console.error("Failed to load category:", err));
     }
-  }, [activeCategory, fetchEffects]);
+  }, [activeCategory, loadCategory]);
+
+  const effects = useMemo(() => {
+    if (activeCategory === "All") {
+      const featuredEffects = manifest?.featured.filter((item) => item.type === "effect") as EffectPreset[] || [];
+      return featuredEffects;
+    } else {
+      const cacheKey = `effect:${activeCategory.toLowerCase()}`;
+      return (categories[cacheKey] || []) as EffectPreset[];
+    }
+  }, [manifest, categories, activeCategory]);
+
+  const loading = manifestLoading || (activeCategory !== "All" && useVideoEffectsStore.getState().categoryLoading[`effect:${activeCategory.toLowerCase()}`]);
+  const error = manifestError || (activeCategory !== "All" && useVideoEffectsStore.getState().categoryErrors[`effect:${activeCategory.toLowerCase()}`]);
 
   const filteredEffects = useMemo(() => {
-    let filtered = activeCategory === "All" ? effects : effects.filter((e) => e.category.toLowerCase() === activeCategory.toLowerCase());
+    let filtered = effects;
 
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
-      filtered = filtered.filter((e) => e.name.toLowerCase().includes(query) || e.category.toLowerCase().includes(query));
+      filtered = filtered.filter((e: EffectPreset) => e.name.toLowerCase().includes(query) || e.category.toLowerCase().includes(query));
     }
 
     return filtered;
-  }, [effects, activeCategory, searchQuery]);
+  }, [effects, searchQuery]);
 
   return (
     <div className="flex flex-col h-full">
       {/* Category tabs */}
       <div className="relative shrink-0 border-b border-border/40 bg-surface/5">
-        <div className="absolute left-0 top-0 bottom-0 w-3 bg-linear-to-l to-surface from-transparent pointer-events-none z-10" />
-        <div className="flex overflow-x-auto gap-2 p-1 whitespace-nowrap" style={{ scrollbarWidth: "none" }}>
-          {EFFECT_CATEGORIES.map((cat) => (
-            <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-2 py-1 text-xs font-medium rounded-sm transition-colors cursor-pointer hover:bg-accent/10 hover:text-accent ${activeCategory === cat ? "bg-accent/10 text-accent" : "text-text-muted"}`}>
+        <div className="grow overflow-x-auto flex items-center gap-1.5 p-2 scrollbar-none whitespace-nowrap">
+          {["All", "Camera", "Distortion", "Color", "Time"].map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setActiveCategory(cat)}
+              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                activeCategory === cat
+                  ? "bg-accent text-white"
+                  : "bg-surface-raised border border-border text-text-muted hover:text-text-primary"
+              }`}
+            >
               {cat}
             </button>
           ))}
         </div>
-        <div className="absolute right-0 top-0 bottom-0 w-3 bg-linear-to-l from-surface to-transparent pointer-events-none z-10" />
       </div>
 
-      {/* Search Bar */}
-      <div className="p-1 border-b border-border">
+      {/* Search Input */}
+      <div className="p-3 shrink-0 border-b border-border/40">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
-          <input type="text" placeholder="Search effects..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-surface-raised border border-border rounded-lg pl-9 pr-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search effects..."
+            className="w-full bg-surface-raised border border-border/60 rounded-lg pl-9 pr-4 py-2 text-xs text-text-primary outline-none focus:border-accent focus:ring-1 focus:ring-accent/20 transition-all selectable"
+          />
         </div>
       </div>
 
-      {/* Content Area */}
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-1">
+      {/* Grid Content */}
+      <div className="grow overflow-y-auto p-3 scrollbar-thin">
         {loading && (
-          <div className="flex items-center justify-center gap-2 py-10 text-xs text-text-muted">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading effects...
+          <div className="flex items-center justify-center h-40">
+            <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent border-t-transparent" />
           </div>
         )}
 
-        {!loading && error && (
-          <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-300 flex items-start gap-2">
+        {error && (
+          <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
             <AlertCircle className="h-4 w-4 shrink-0" />
             <span>{error}</span>
           </div>
@@ -96,13 +121,16 @@ export function EffectPicker({ onSelect }: EffectPickerProps) {
   );
 }
 
-// Effect Card Component
 const EffectCard: React.FC<{ effect: EffectPreset; onSelect: (effect: EffectPreset) => void }> = ({ effect, onSelect }) => {
   const [isHovered, setIsHovered] = useState(false);
 
   return (
-    <div className="group relative aspect-square bg-surface-raised hover:bg-surface-raised/60 rounded-lg overflow-hidden transition-all border border-border hover:border-accent/30 cursor-pointer" onClick={() => onSelect(effect)} onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}>
-      {/* Premium Badge */}
+    <div
+      className="group relative aspect-square bg-surface-raised hover:bg-surface-raised/60 rounded-lg overflow-hidden transition-all border border-border hover:border-accent/30 cursor-pointer"
+      onClick={() => onSelect(effect)}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
       {effect.isPremium && (
         <div className="absolute top-2 left-2 z-10">
           <div className="bg-linear-to-r from-purple-500 to-pink-500 rounded-full p-1">
@@ -111,22 +139,18 @@ const EffectCard: React.FC<{ effect: EffectPreset; onSelect: (effect: EffectPres
         </div>
       )}
 
-      {/* Thumbnail */}
-      {effect.thumbnailUrl ? (
-        <img src={effect.thumbnailUrl} alt={effect.name} className="w-full h-full object-cover" />
+      {effect.thumbnail ? (
+        <img src={effect.thumbnail} alt={effect.name} className="w-full h-full object-cover" />
       ) : (
         <div className="w-full h-full flex items-center justify-center bg-linear-to-br from-accent/20 to-accent/5">
           <span className="text-4xl opacity-40">🎬</span>
         </div>
       )}
 
-      {/* Name Overlay on Hover */}
       <div className={`absolute inset-x-0 bottom-0 bg-linear-to-t from-black/80 to-transparent p-2 transition-opacity ${isHovered ? "opacity-100" : "opacity-0"}`}>
         <p className="text-xs font-semibold text-white truncate">{effect.name}</p>
-        {effect.strength && <p className="text-[10px] text-white/60">{effect.strength}</p>}
       </div>
 
-      {/* Hover Overlay */}
       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors pointer-events-none" />
     </div>
   );

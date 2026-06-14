@@ -31,7 +31,7 @@ export function EffectsPanel() {
     await applyOverlayToClip(selectedClipIds[0], overlay);
   };
 
-  const handleEffectSelect = (effect: EffectPreset) => {
+  const handleEffectSelect = async (effect: EffectPreset) => {
     if (!selectedClipIds || selectedClipIds.length === 0) {
       console.warn("No clip selected");
       return;
@@ -41,7 +41,7 @@ export function EffectsPanel() {
     applyEffectToClip(selectedClipIds[0], effect);
   };
 
-  const handleTransitionSelect = (transition: TransitionPreset) => {
+  const handleTransitionSelect = async (transition: TransitionPreset) => {
     if (!selectedClipIds || selectedClipIds.length !== 2) {
       console.warn("Select exactly 2 adjacent clips");
       return;

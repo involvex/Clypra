@@ -24,7 +24,6 @@ const getHeaders = (): HeadersInit => {
   const headers: HeadersInit = {
     "Content-Type": "application/json",
     "X-Clypra-Client": "clypra-desktop-v1",
-    "User-Agent": "Clypra-Desktop/1.0.0",
   };
 
   if (API_KEY) {

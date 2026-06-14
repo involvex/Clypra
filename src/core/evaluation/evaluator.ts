@@ -28,6 +28,7 @@ import { getEvaluationCache, computeClipVersion } from "./cache";
 import { evaluateProperty } from "./animation";
 import { resolveClipSourceTime } from "../timeline/sourceTime";
 import { calculateTextAnimationState } from "@/lib/text/textAnimation";
+import { normalizeFilterIntensity } from "../render/filterIR";
 
 /**
  * Evaluate the NLE timeline at a specific time.
@@ -75,6 +76,15 @@ export function evaluateTimelineScene(time: number, clips: Clip[], tracks: Track
 
   // ─── 2. Compositing Order (Contract §2) ───────────────────────────────────
 
+  // Find active timeline filter clip at this time (lowest trackIndex = top in UI)
+  const activeFilterClips = compositorClips
+    .filter((c) => {
+      const track = trackMap.get(c.trackId);
+      return c.kind === "filter" && (track?.visible ?? true) && c.startTime <= evalTime && evalTime < c.startTime + c.duration;
+    })
+    .sort((a, b) => a.trackIndex - b.trackIndex);
+  const activeFilterClip = activeFilterClips[0] ?? null;
+
   const sortedClips = activeClips.sort((a, b) => {
     const roleOrder = getRoleOrder(a.role) - getRoleOrder(b.role);
     if (roleOrder !== 0) return roleOrder;
@@ -88,19 +98,6 @@ export function evaluateTimelineScene(time: number, clips: Clip[], tracks: Track
     if (zOrder !== 0) return zOrder;
     return a.evaluationPriority - b.evaluationPriority;
   });
-
-  // TRACE: Z-order verification (can be removed after validation)
-  if (sortedClips.length > 0) {
-    console.log(
-      "[TRACE][EVALUATOR] Sorted order:",
-      sortedClips.map((c, idx) => ({
-        idx,
-        trackIndex: c.trackIndex,
-        role: c.role,
-        clipId: c.id.substring(0, 8),
-      })),
-    );
-  }
 
   // ─── 3. Evaluate Visual Layers ────────────────────────────────────────────
 
@@ -177,6 +174,8 @@ export function evaluateTimelineScene(time: number, clips: Clip[], tracks: Track
         shadow: textClip.shadow,
         background: textClip.background,
         styleId: textClip.styleId,
+        templateId: textClip.templateId,
+        customization: textClip.customization,
       };
 
       visualLayers.push(textLayer);
@@ -219,6 +218,7 @@ export function evaluateTimelineScene(time: number, clips: Clip[], tracks: Track
       transitionType: transitionState.type,
       transitionProgress: transitionState.progress,
       blendMode: (clip as any).blendMode || "normal",
+      stickerSettings: (clip as any).stickerSettings,
       effects: clip.effects?.map((fx) => ({
         effectId: fx.id,
         type: "video_effect",
@@ -302,7 +302,15 @@ export function evaluateTimelineScene(time: number, clips: Clip[], tracks: Track
     activeMediaHash,
   };
 
-  return { visualLayers, audioLayers, transitions: evaluatedTransitions, metadata };
+  const activeFilter = activeFilterClip
+    ? {
+        id: activeFilterClip.mediaId,
+        name: activeFilterClip.name || "",
+        intensity: normalizeFilterIntensity((activeFilterClip as any).intensity),
+      }
+    : undefined;
+
+  return { visualLayers, audioLayers, transitions: evaluatedTransitions, metadata, activeFilter };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

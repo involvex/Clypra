@@ -82,6 +82,7 @@ interface TimelineStore {
   updateClip: (clipId: string, updates: Partial<Clip>) => void;
   addTransition: (transition: TransitionTimelineItem) => void;
   removeTransition: (transitionId: string) => void;
+  updateTransition: (transitionId: string, updates: Partial<TransitionTimelineItem>) => void;
   createTransitionBetweenClips: (fromClipId: string, toClipId: string, type: TransitionType, duration?: number) => { transition?: TransitionTimelineItem; error: string | null };
   moveClip: (clipId: string, startTime: number) => void;
   setZoom: (level: number) => void;
@@ -113,12 +114,13 @@ const trackHeights: Record<string, number> = {
   audio: 52,
   text: 30,
   sticker: 30,
+  filter: 30,
 };
 const MIN_TRIM_DURATION_SEC = 1;
 
 /** Where to insert a new row when dropping off-track: video/text at top; audio under first video (or append if no video). */
 export function getInsertIndexForNewTrack(tracks: Track[], trackType: TrackType): number {
-  if (trackType === "video" || trackType === "text" || trackType === "sticker") {
+  if (trackType === "video" || trackType === "text" || trackType === "sticker" || trackType === "filter") {
     return 0;
   }
   const mainIdx = tracks.findIndex((t) => t.type === "video");
@@ -315,6 +317,13 @@ export const useTimelineStore = create<TimelineStore>(
 
     addClip: (clip) => {
       set((state) => {
+        // Prevent adding duplicate clips with the same ID
+        const existingClip = state.clips.find((c) => c.id === clip.id);
+        if (existingClip) {
+          console.warn(`[TimelineStore] Clip with ID "${clip.id}" already exists. Skipping duplicate.`);
+          return state; // Return unchanged state
+        }
+
         const wasEmpty = state.clips.length === 0;
 
         // Check for overlap and adjust position if needed
@@ -429,6 +438,20 @@ export const useTimelineStore = create<TimelineStore>(
       set((state) => {
         const next: Partial<TimelineStore> = {
           transitions: state.transitions.filter((transition) => transition.id !== transitionId),
+        };
+        if (state._batchDepth > 0) {
+          next._pendingEpochIncrement = true;
+        } else {
+          next.epoch = state.epoch + 1;
+        }
+        return next;
+      });
+    },
+
+    updateTransition: (transitionId, updates) => {
+      set((state) => {
+        const next: Partial<TimelineStore> = {
+          transitions: state.transitions.map((t) => (t.id === transitionId ? { ...t, ...updates } : t)),
         };
         if (state._batchDepth > 0) {
           next._pendingEpochIncrement = true;

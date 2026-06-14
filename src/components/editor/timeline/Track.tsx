@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { Lock } from "lucide-react";
+import { Lock, Shuffle } from "lucide-react";
 import { useDrop } from "react-dnd";
 import { useUIStore } from "@/store/uiStore";
 import { useTimelineStore } from "@/store/timelineStore";
@@ -29,8 +29,8 @@ interface TrackProps {
 }
 
 const TrackInner: React.FC<TrackProps> = ({ track, pixelsPerSecond, clips, onClipDragStart, onClipDragMove, onClipDragEnd, dragState }) => {
-  const { selectedClipIds, selectedGapId, selectedTrackId } = useUIStore();
-  const { gaps = [] } = useTimelineStore();
+  const { selectedClipIds, selectedGapId, selectedTrackId, selectedTransitionId, selectTransition } = useUIStore();
+  const { gaps = [], transitions = [] } = useTimelineStore();
   const { getMediaAsset } = useTimeline();
 
   // Drop handler for media assets from MediaTab
@@ -38,11 +38,8 @@ const TrackInner: React.FC<TrackProps> = ({ track, pixelsPerSecond, clips, onCli
     () => ({
       accept: ["MEDIA_ASSET"],
       drop: (item: DragItem, monitor: any) => {
-        console.log("[Track] Drop triggered:", { trackId: track.id, locked: track.locked, type: track.type, item });
         if (!track.locked && track.type !== "text") {
           handleDropOnTrack(item, monitor, track.id);
-        } else {
-          console.log("[Track] Drop rejected - locked or text track");
         }
       },
       canDrop: () => !track.locked && track.type !== "text",
@@ -62,6 +59,9 @@ const TrackInner: React.FC<TrackProps> = ({ track, pixelsPerSecond, clips, onCli
 
   // Get gaps for this track
   const trackGaps = useMemo(() => gaps.filter((g) => g.trackId === track.id), [gaps, track.id]);
+
+  // Get transitions for this track
+  const trackTransitions = useMemo(() => transitions.filter((t) => t.placement.trackId === track.id), [transitions, track.id]);
 
   // Calculate display info from placement preview (single source of truth)
   const displayInfo = useMemo(() => {
@@ -191,6 +191,32 @@ const TrackInner: React.FC<TrackProps> = ({ track, pixelsPerSecond, clips, onCli
                   : undefined
               }
             />
+          );
+        })}
+
+      {/* Transitions layer */}
+      {track.visible &&
+        trackTransitions.map((t) => {
+          const isSelected = selectedTransitionId === t.id;
+          const left = t.placement.startTime * pixelsPerSecond;
+          const width = t.placement.duration * pixelsPerSecond;
+
+          return (
+            <button
+              key={t.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                selectTransition(t.id);
+              }}
+              className={`absolute top-1/2 -translate-y-1/2 h-7 rounded z-35 flex items-center justify-center cursor-pointer transition-all border ${isSelected ? "bg-accent/80 text-white border-white shadow-md scale-105" : "bg-surface-raised/80 hover:bg-surface-raised border-border/40 text-text-muted hover:text-text-primary hover:border-accent/30"}`}
+              style={{
+                left: `${left}px`,
+                width: `${width}px`,
+              }}
+              title={`${t.type === "dissolve" ? "Dissolve" : "Fade"} Transition (${t.placement.duration.toFixed(1)}s)`}
+            >
+              <Shuffle className="w-3 h-3" />
+            </button>
           );
         })}
 

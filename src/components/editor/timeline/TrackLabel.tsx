@@ -63,17 +63,20 @@ export const TrackLabel: React.FC<TrackLabelProps> = ({ track }) => {
         {track.visible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
       </button>
 
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          toggleTrackMute(track.id);
-        }}
-        className={`p-1 rounded transition-colors cursor-pointer hover:bg-timeline-button-hover ${track.muted ? "bg-timeline-button-hover text-timeline-track-name" : "text-timeline-button-icon"}`}
-        aria-label={track.muted ? "Unmute track" : "Mute track"}
-        title={track.muted ? "Unmute track" : "Mute track"}
-      >
-        {track.muted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
-      </button>
+      {/* Only show mute button for tracks that produce audio */}
+      {(track.type === "video" || track.type === "audio") && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleTrackMute(track.id);
+          }}
+          className={`p-1 rounded transition-colors cursor-pointer hover:bg-timeline-button-hover ${track.muted ? "bg-timeline-button-hover text-timeline-track-name" : "text-timeline-button-icon"}`}
+          aria-label={track.muted ? "Unmute track" : "Mute track"}
+          title={track.muted ? "Unmute track" : "Mute track"}
+        >
+          {track.muted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+        </button>
+      )}
 
       {/* Pack Track button - only show if track has unprotected gaps */}
       {hasGaps && (

@@ -112,6 +112,9 @@ export interface EvaluatedMediaLayer extends BaseVisualLayer {
 
   /** Source media rotation from container metadata (0, 90, 180, 270) */
   readonly sourceRotation?: number;
+  
+  /** Sticker-specific settings */
+  readonly stickerSettings?: { speed: number; loop: boolean };
 
   /** Active color filter on this layer */
   readonly filter?: { id: string; name: string; intensity: number };
@@ -190,6 +193,10 @@ export interface EvaluatedTextLayer extends BaseVisualLayer {
 
   /** Style preset ID for text effects */
   readonly styleId?: string;
+
+  /** Template-specific settings */
+  readonly templateId?: string;
+  readonly customization?: any;
 }
 
 /**
@@ -326,6 +333,9 @@ export interface EvaluatedScene {
 
   /** Scene metadata */
   readonly metadata: SceneMetadata;
+
+  /** Active track-level filter at this playhead time */
+  readonly activeFilter?: { id: string; name: string; intensity: number };
 }
 
 /**

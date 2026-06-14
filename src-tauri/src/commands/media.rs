@@ -220,16 +220,19 @@ pub async fn extract_audio_track(path: String) -> Result<String, String> {
 
     eprintln!("🦀 [extract_audio_track] Extracting audio from: {}", path);
 
-    // Create a temporary directory inside the workspace if it doesn't exist
-    let temp_dir = Path::new("temp");
-    if !temp_dir.exists() {
-        fs::create_dir_all(temp_dir).map_err(|e| format!("Failed to create temp directory: {}", e))?;
+    // Use system temp directory to avoid triggering file watchers in dev mode
+    let temp_dir = std::env::temp_dir();
+    
+    // Create a clypra-specific subdirectory
+    let clypra_temp = temp_dir.join("clypra-audio");
+    if !clypra_temp.exists() {
+        fs::create_dir_all(&clypra_temp).map_err(|e| format!("Failed to create temp directory: {}", e))?;
     }
 
     // Generate a unique filename using MD5 of path
     let hash = format!("{:x}", md5::compute(path.as_bytes()));
     let output_filename = format!("{}.mp3", hash);
-    let output_path = temp_dir.join(output_filename);
+    let output_path = clypra_temp.join(output_filename);
     let output_path_str = output_path.to_str().ok_or("Failed to convert output path to string")?.to_string();
 
     // Call ffmpeg command to extract audio: ffmpeg -i <path> -vn -acodec libmp3lame -ac 1 -ar 16000 -y <output_path>
@@ -266,6 +269,7 @@ pub async fn transcribe_audio_local(
     audio_path: String,
     model_size: Option<String>,
     language: Option<String>,
+    language_hints: Option<Vec<String>>,
 ) -> Result<String, String> {
     use std::process::Command;
     use std::fs;
@@ -276,7 +280,30 @@ pub async fn transcribe_audio_local(
 
     eprintln!("🦀 [transcribe_audio_local] Transcribing: {} (model: {}, lang: {})", audio_path, model, lang_param);
 
-    // Resolve script path robustly to handle different current working directories in Tauri
+    // Get app data directory for models
+    let app_data_dir: String = std::env::var("TAURI_APP_DATA_DIR")
+        .or_else(|_| -> Result<String, String> {
+            // Fallback: construct it manually
+            let home = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .map_err(|_| "Could not determine home directory".to_string())?;
+            
+            #[cfg(target_os = "macos")]
+            let path = format!("{}/Library/Application Support/com.clypra.editor", home);
+            
+            #[cfg(target_os = "windows")]
+            let path = format!("{}\\AppData\\Roaming\\com.clypra.editor", home);
+            
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            let path = format!("{}/.local/share/com.clypra.editor", home);
+            
+            Ok(path)
+        }).map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    
+    let models_dir = format!("{}/models/whisper", app_data_dir);
+    eprintln!("🦀 [transcribe_audio_local] Models directory: {}", models_dir);
+
+    // Verify Python script exists
     let mut script_path = PathBuf::from("src/features/text-effects/transcribe.py");
     if !script_path.exists() {
         script_path = PathBuf::from("../src/features/text-effects/transcribe.py");
@@ -297,29 +324,75 @@ pub async fn transcribe_audio_local(
         }
     }
 
+    if !script_path.exists() {
+        return Err(format!("Transcription script not found. Expected at: {:?}", script_path));
+    }
+
     let script_path_str = script_path.to_str().ok_or("Failed to convert script path to string")?.to_string();
     eprintln!("🦀 [transcribe_audio_local] Resolved script path: {}", script_path_str);
 
-    // Build command arguments with model and language
+    // Build language hint prompt if hints are provided
+    let prompt = if let Some(hints) = language_hints {
+        if !hints.is_empty() {
+            let lang_names: Vec<String> = hints.iter().map(|code| {
+                match code.as_str() {
+                    "en" => "English",
+                    "es" => "Spanish",
+                    "fr" => "French",
+                    "de" => "German",
+                    "it" => "Italian",
+                    "pt" => "Portuguese",
+                    "ru" => "Russian",
+                    "ja" => "Japanese",
+                    "ko" => "Korean",
+                    "zh" => "Chinese",
+                    "ar" => "Arabic",
+                    "hi" => "Hindi",
+                    _ => code.as_str(),
+                }.to_string()
+            }).collect();
+            Some(format!("This audio may contain speech in {}. Transcribe accordingly.", lang_names.join(", ")))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(ref p) = prompt {
+        eprintln!("🦀 [transcribe_audio_local] Using language hint prompt: {}", p);
+    }
+
+    // Build command arguments with model, language, model directory, and optional prompt
     let mut args = vec![
         "run".to_string(),
         script_path_str.clone(),
         audio_path.clone(),
+        format!("--model={}", model),
+        format!("--model-dir={}", models_dir),
     ];
-    
-    // Add model size argument
-    args.push(format!("--model={}", model));
     
     // Add language argument if not auto
     if lang_param != "auto" {
         args.push(format!("--language={}", lang_param));
     }
 
+    // Add prompt if generated from hints
+    if let Some(p) = prompt {
+        args.push(format!("--prompt={}", p));
+    }
+
+    eprintln!("🦀 [transcribe_audio_local] Executing command: uv {}", args.join(" "));
+
     // Call uv command to run our python script
     let output = Command::new("uv")
         .args(&args)
         .output()
         .map_err(|e| format!("Failed to execute uv transcription: {}", e))?;
+
+    eprintln!("🦀 [transcribe_audio_local] Command completed with status: {}", output.status);
+
+    eprintln!("🦀 [transcribe_audio_local] Command completed with status: {}", output.status);
 
     // Delete the temporary audio file since transcription is completed (to prevent disk bloat)
     if let Err(e) = fs::remove_file(&audio_path) {
@@ -328,10 +401,15 @@ pub async fn transcribe_audio_local(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        eprintln!("🦀 [transcribe_audio_local] Transcription failed!");
+        eprintln!("  stdout: {}", stdout);
+        eprintln!("  stderr: {}", stderr);
         return Err(format!("Whisper transcription failed: {}", stderr));
     }
 
     let stdout_str = String::from_utf8_lossy(&output.stdout);
+    eprintln!("🦀 [transcribe_audio_local] Transcription successful, output length: {} bytes", stdout_str.len());
     Ok(stdout_str.trim().to_string())
 }
 

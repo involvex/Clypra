@@ -1,7 +1,10 @@
 import React, { useMemo, useState, useEffect } from "react";
-import { Aperture, CircleDot, Grid3X3, Palette, Plus, Search, SlidersHorizontal, Sparkles, Sun, Wand2, Zap, Loader2, AlertCircle, type LucideIcon } from "lucide-react";
+import { Aperture, CircleDot, Grid3X3, Palette, Plus, Search, SlidersHorizontal, Sparkles, Sun, Wand2, Zap, Loader2, AlertCircle, CheckCircle, Download, type LucideIcon } from "lucide-react";
 import type { TabProps } from "./types";
-import { useVideoEffectsStore, type EffectItem } from "@/store/videoEffectsStore";
+import { useVideoEffectsStore } from "@/features/video-effects/store/videoEffectsStore";
+import type { EffectPreset } from "@/features/video-effects/types";
+import { useProjectStore } from "@/store/projectStore";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/Tooltip";
 
 const EFFECT_CATEGORIES = [
   { id: "all", label: "All" },
@@ -39,57 +42,63 @@ export const EffectsTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
   const [statusFilter, setStatusFilter] = useState<EffectStatusFilter>("all");
   const [strengthFilter, setStrengthFilter] = useState<EffectStrengthFilter>("all");
 
-  const { categoryItems, loading, errors, loadCategory } = useVideoEffectsStore();
+  const loadCategory = useVideoEffectsStore((state) => state.loadCategory);
+  const categories = useVideoEffectsStore((state) => state.categories);
+  const loading = useVideoEffectsStore((state) => state.categoryLoading);
+  const errors = useVideoEffectsStore((state) => state.categoryErrors);
 
   const categoriesToLoad = useMemo(() => {
     return EFFECT_CATEGORIES.filter((c) => c.id !== "all").map((c) => c.id);
+  }, []);
+
+  // Initialize cache on mount
+  useEffect(() => {
+    useVideoEffectsStore.getState().initializeCache();
   }, []);
 
   // Fetch category items dynamically
   useEffect(() => {
     if (activeCategory === "all") {
       categoriesToLoad.forEach((cat) => {
-        loadCategory(cat);
+        loadCategory("effect", cat).catch((err) => console.error(`Failed to load category ${cat}:`, err));
       });
     } else {
-      loadCategory(activeCategory);
+      loadCategory("effect", activeCategory).catch((err) => console.error(`Failed to load category ${activeCategory}:`, err));
     }
   }, [activeCategory, loadCategory, categoriesToLoad]);
 
   // Consolidate list based on active category selection
   const allEffects = useMemo(() => {
     if (activeCategory === "all") {
-      // Flatten all loaded categories
-      return Object.values(categoryItems).flat();
+      return categoriesToLoad.flatMap((cat) => categories[`effect:${cat}`] || []) as EffectPreset[];
     }
-    return categoryItems[activeCategory] || [];
-  }, [activeCategory, categoryItems]);
+    return (categories[`effect:${activeCategory}`] || []) as EffectPreset[];
+  }, [activeCategory, categories, categoriesToLoad]);
 
   const filteredEffects = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return allEffects.filter((effect) => {
-      const matchesStatus = statusFilter === "all" || effect.status === statusFilter;
-      const matchesStrength = strengthFilter === "all" || effect.strength?.toLowerCase() === strengthFilter;
+      const matchesStatus = statusFilter === "all" || (effect as any).status === statusFilter;
+      const matchesStrength = strengthFilter === "all" || (effect as any).strength?.toLowerCase() === strengthFilter;
       const matchesSearch = !query || effect.name.toLowerCase().includes(query) || effect.description.toLowerCase().includes(query) || effect.category.includes(query);
       return matchesStatus && matchesStrength && matchesSearch;
     });
   }, [allEffects, searchQuery, statusFilter, strengthFilter]);
 
-  const readyCount = filteredEffects.filter((effect) => effect.status === "ready").length;
+  const readyCount = filteredEffects.filter((effect) => (effect as any).status === "ready").length;
 
   const isCategoryLoading = useMemo(() => {
     if (activeCategory === "all") {
-      return categoriesToLoad.some((cat) => loading[cat]);
+      return categoriesToLoad.some((cat) => loading[`effect:${cat}`]);
     }
-    return loading[activeCategory] || false;
+    return loading[`effect:${activeCategory}`] || false;
   }, [activeCategory, loading, categoriesToLoad]);
 
   const categoryError = useMemo(() => {
     if (activeCategory === "all") {
-      // Return first error found, if any
-      return categoriesToLoad.map((cat) => errors[cat]).find(Boolean) || null;
+      return categoriesToLoad.map((cat) => errors[`effect:${cat}`]).find(Boolean) || null;
     }
-    return errors[activeCategory] || null;
+    return errors[`effect:${activeCategory}`] || null;
   }, [activeCategory, errors, categoriesToLoad]);
 
   return (
@@ -172,31 +181,102 @@ const SkeletonCard = () => (
   </div>
 );
 
-const EffectCard: React.FC<{ effect: EffectItem; onAddToTimeline: () => void }> = ({ effect, onAddToTimeline }) => {
+const EffectCard: React.FC<{ effect: EffectPreset; onAddToTimeline: () => void }> = ({ effect, onAddToTimeline }) => {
   const Icon = EFFECT_ICONS[effect.id] || DEFAULT_ICON;
-  const isReady = effect.status === "ready";
+  const isReady = (effect as any).status === "ready";
+
+  const { getEffectDownloadState, startEffectDownload, isEffectDownloaded } = useVideoEffectsStore();
+
+  const downloadState = getEffectDownloadState(effect.id);
+  const isDownloadedFlag = isEffectDownloaded(effect.id);
+  const isDownloading = downloadState?.status === "downloading";
+
+  // Handle preview (download effect JSON first)
+  const handlePreview = async () => {
+    if (!isReady) return;
+
+    try {
+      // Download effect if not cached
+      await startEffectDownload(effect);
+
+      // TODO: Open effect preview modal
+      // For now, just show a toast
+      useProjectStore.getState().showToast(`Preview for ${effect.name} - Full preview coming soon!`);
+    } catch (error) {
+      console.error("[EffectCard] Preview failed:", error);
+      useProjectStore.getState().showToast("Failed to load effect preview", "error");
+    }
+  };
+
+  // Handle add to timeline (download first, then add)
+  const handleAddToTimeline = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent triggering preview
+    if (!isReady || isDownloading) return;
+
+    try {
+      await startEffectDownload(effect);
+      onAddToTimeline();
+    } catch (error) {
+      console.error("[EffectCard] Add to timeline failed:", error);
+      useProjectStore.getState().showToast("Failed to add effect", "error");
+    }
+  };
+
   return (
-    <button onClick={isReady ? onAddToTimeline : undefined} disabled={!isReady} className={`group text-left rounded-lg border bg-surface-raised/60 transition-all overflow-hidden flex flex-col h-[180px] justify-between ${isReady ? "border-border/50 hover:bg-surface-raised hover:border-accent/30 cursor-pointer" : "border-border/30 opacity-70 cursor-not-allowed"}`}>
+    <div onClick={handlePreview} className={`group text-left rounded-lg border bg-surface-raised/60 transition-all overflow-hidden flex flex-col h-[180px] justify-between ${isReady ? "hover:bg-surface-raised hover:border-accent/30 cursor-pointer" : "opacity-70 cursor-not-allowed"} ${isDownloading ? "border-accent/60" : "border-border/50"}`}>
+      {/* Downloading Overlay */}
+      {isDownloading && (
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] flex items-center justify-center z-20 pointer-events-none">
+          <div className="flex flex-col items-center gap-2">
+            <Loader2 className="w-6 h-6 text-accent animate-spin" />
+            <span className="text-[10px] font-semibold text-accent">{downloadState?.progress || 0}%</span>
+          </div>
+        </div>
+      )}
+
       <div className={`h-16 w-full bg-linear-to-br ${effect.swatch} relative overflow-hidden shrink-0`}>
         <div className="absolute inset-0 opacity-40 bg-[radial-gradient(circle_at_30%_30%,rgba(255,255,255,0.42),transparent_38%)]" />
         <div className="absolute left-2 top-2 h-7 w-7 rounded-md bg-black/30 border border-white/10 flex items-center justify-center backdrop-blur-sm">
           <Icon className="w-4 h-4 text-white" />
         </div>
-        <span className={`absolute right-2 top-2 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${effect.status === "ready" ? "bg-emerald-500/20 text-emerald-200 border border-emerald-400/20" : "bg-white/10 text-white/70 border border-white/10"}`}>{effect.status === "ready" ? "Ready" : "Soon"}</span>
+
+        {/* Cached Indicator */}
+        {isDownloadedFlag && !isDownloading && (
+          <div className="absolute top-2 right-2 z-10">
+            <div className="bg-green-500/90 rounded-full p-0.5 shadow-md">
+              <CheckCircle className="w-3 h-3 text-white" />
+            </div>
+          </div>
+        )}
+
+        {!isDownloadedFlag && !isDownloading && <span className={`absolute right-2 top-2 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${(effect as any).status === "ready" ? "bg-emerald-500/20 text-emerald-200 border border-emerald-400/20" : "bg-white/10 text-white/70 border border-white/10"}`}>{(effect as any).status === "ready" ? "Ready" : "Soon"}</span>}
       </div>
       <div className="p-2 flex-1 flex flex-col justify-between">
         <div>
           <div className="flex items-start justify-between gap-2">
             <p className="text-[13px] font-semibold text-text-primary leading-tight truncate">{effect.name}</p>
-            <Plus className={`w-3.5 h-3.5 text-text-muted shrink-0 transition-colors ${isReady ? "group-hover:text-accent" : ""}`} />
+
+            {/* Add to Timeline Button */}
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button onClick={handleAddToTimeline} disabled={isDownloading || !isReady} className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${isDownloading ? "bg-accent/20 border border-accent cursor-wait" : isDownloadedFlag ? "bg-accent/20 hover:bg-accent border border-accent text-accent hover:text-white cursor-pointer" : "bg-surface/40 hover:bg-accent/80 border border-border/50 text-text-muted hover:text-white cursor-pointer"}`}>
+                    {isDownloading ? <Download className="w-3.5 h-3.5 animate-pulse" /> : <Plus className="w-3.5 h-3.5" />}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p>{isDownloadedFlag ? "Add to Timeline" : "Download & Add"}</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
           </div>
           <p className="mt-1 text-[11px] leading-snug text-text-muted line-clamp-2">{effect.description}</p>
         </div>
         <div className="mt-2 flex items-center justify-between border-t border-border/40 pt-1.5">
           <span className="text-[10px] capitalize text-text-muted truncate mr-1">{effect.category}</span>
-          {effect.strength && <span className="text-[10px] text-text-muted shrink-0">{effect.strength}</span>}
+          {(effect as any).strength && <span className="text-[10px] text-text-muted shrink-0">{(effect as any).strength}</span>}
         </div>
       </div>
-    </button>
+    </div>
   );
 };

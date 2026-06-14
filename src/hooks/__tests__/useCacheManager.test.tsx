@@ -3,7 +3,7 @@ import { renderHook, act } from "@testing-library/react";
 import { useCacheManager } from "../useCacheManager";
 import { CacheManager } from "@/lib/cache/cacheManager";
 
-vi.mock("@/lib/cacheManager", () => ({
+vi.mock("@/lib/cache/cacheManager", () => ({
   CacheManager: {
     getCacheInfo: vi.fn().mockResolvedValue({
       localStorage: 3,

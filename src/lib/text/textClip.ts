@@ -58,6 +58,7 @@ export interface CreateTextClipOptions {
   // Additional style parameters for custom presets/effects/templates
   styleId?: string;
   templateId?: string;
+  customization?: any;
   fontWeight?: string | number;
   fontStyle?: "normal" | "italic";
   stroke?: { color: string; width: number };
@@ -152,7 +153,7 @@ export function calculateTextClipSize(options: { text: string; fontFamily: strin
  */
 export function createTextClip(options: CreateTextClipOptions): TextClip {
   const defaultFontSize = options.styleId ? 96 : 100;
-  const { trackId, startTime, duration = 5.0, text = "Text", canvasWidth, canvasHeight, fontSize = defaultFontSize, fontFamily = "Inter, system-ui, sans-serif", color = "#ffffff", bold = false, italic = false, position = "center", textRole, words, styleId, templateId, fontWeight, fontStyle, stroke, shadow, background, effectDefinition } = options;
+  const { trackId, startTime, duration = 5.0, text = "Text", canvasWidth, canvasHeight, fontSize = defaultFontSize, fontFamily = "Inter, system-ui, sans-serif", color = "#ffffff", bold = false, italic = false, position = "center", textRole, words, styleId, templateId, customization, fontWeight, fontStyle, stroke, shadow, background, effectDefinition } = options;
 
   const sizing = calculateTextClipSize({
     text,
@@ -203,6 +204,7 @@ export function createTextClip(options: CreateTextClipOptions): TextClip {
     words, // Include word-level timestamps for karaoke-style highlighting
     styleId,
     templateId,
+    customization,
     stroke,
     shadow,
     background,

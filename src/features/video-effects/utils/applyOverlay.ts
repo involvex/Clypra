@@ -4,7 +4,8 @@
 
 import { useVideoEffectsStore } from "../store/videoEffectsStore";
 import { useTimelineStore } from "@/store/timelineStore";
-import type { OverlayAsset, ClipOverlay } from "../types";
+import type { OverlayAsset } from "../types";
+import type { ClipOverlay } from "@/types";
 import { generateId } from "@/lib/utils/id";
 
 export async function applyOverlayToClip(clipId: string, overlay: OverlayAsset): Promise<void> {
@@ -22,7 +23,7 @@ export async function applyOverlayToClip(clipId: string, overlay: OverlayAsset):
 
   // Create overlay data
   const clipOverlay: ClipOverlay = {
-    id: generateId(),
+    id: generateId("overlay"),
     effectId: overlay.id,
     type: "overlay",
     url: objectURL,

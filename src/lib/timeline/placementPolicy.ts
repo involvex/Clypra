@@ -1,5 +1,5 @@
 import type { ClipFitModeExtended } from "./timelineClip";
-import type { Clip, MediaAsset, Track } from "@/types";
+import type { Clip, MediaAsset, Track, TrackType } from "@/types";
 
 export interface PlacementPolicy {
   defaultVisualFitMode: ClipFitModeExtended;
@@ -31,12 +31,14 @@ export function resolveDefaultFitModeForAsset(asset: Pick<MediaAsset, "type">): 
   return DEFAULT_PLACEMENT_POLICY.defaultVisualFitMode;
 }
 
-export function resolveTargetTrackType(asset: { type: MediaAsset["type"]; id?: string }): "video" | "audio" | "sticker" {
+export function resolveTargetTrackType(asset: { type: MediaAsset["type"]; id?: string; trackType?: TrackType }): "video" | "audio" | "sticker" | "text" | "filter" {
+  // Allow explicit track type override (for text and filter clips)
+  if (asset.trackType) return asset.trackType;
   if (asset.id?.startsWith("sticker-")) return "sticker";
   return asset.type === "audio" ? "audio" : "video";
 }
 
-export function resolvePreferredTrackId(params: { tracks: Track[]; asset: { type: MediaAsset["type"]; id?: string }; preferTrackId?: string | null }): string | null {
+export function resolvePreferredTrackId(params: { tracks: Track[]; asset: { type: MediaAsset["type"]; id?: string; trackType?: TrackType }; preferTrackId?: string | null }): string | null {
   const { tracks, asset, preferTrackId } = params;
   const targetType = resolveTargetTrackType(asset);
 
@@ -49,12 +51,7 @@ export function resolvePreferredTrackId(params: { tracks: Track[]; asset: { type
   return firstUnlocked?.id ?? null;
 }
 
-export function resolveClipStartTime(params: {
-  intent: PlacementIntent;
-  timelineEndTime: number;
-  trackClips?: Clip[];
-  dropTime?: number;
-}): number {
+export function resolveClipStartTime(params: { intent: PlacementIntent; timelineEndTime: number; trackClips?: Clip[]; dropTime?: number }): number {
   const { intent, timelineEndTime, trackClips = [], dropTime = 0 } = params;
 
   if (intent === "drop") return Math.max(0, dropTime);
@@ -66,7 +63,7 @@ export function resolveClipStartTime(params: {
 }
 
 interface ResolveAddPlacementParams {
-  asset: { type: MediaAsset["type"]; id?: string };
+  asset: { type: MediaAsset["type"]; id?: string; trackType?: TrackType };
   tracks: Track[];
   clips: Clip[];
   playheadTime: number;
@@ -76,7 +73,7 @@ interface ResolveAddPlacementParams {
 
 interface AddPlacementDecision {
   intent: AddPlacementIntent;
-  trackType: "video" | "audio" | "sticker";
+  trackType: "video" | "audio" | "sticker" | "text" | "filter";
   startTime: number;
   targetTrackId: string | null;
   shouldCreateTrack: boolean;

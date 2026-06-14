@@ -76,7 +76,7 @@ export interface Project {
   timelineSchemaVersion?: number;
 }
 
-export type TrackType = "video" | "audio" | "text" | "sticker";
+export type TrackType = "video" | "audio" | "text" | "sticker" | "filter";
 
 export interface Track {
   id: string;
@@ -118,10 +118,11 @@ export interface MediaAsset {
   rotation?: number;
 }
 
-export type ClipKind = "video" | "audio" | "image" | "sticker" | "text";
+export type ClipKind = "video" | "audio" | "image" | "sticker" | "text" | "filter";
 
 export interface Clip {
   id: string;
+  name?: string;
   trackId: string;
   mediaId: string;
   startTime: number;
@@ -185,6 +186,7 @@ export interface ClipEffect {
   type: "effect";
   renderer: string; // "shake", "blur", "glitch", etc.
   params: Record<string, any>; // Effect-specific parameters
+  name?: string;
 
   // Timing (relative to clip)
   startTime: number;
@@ -216,6 +218,13 @@ export interface ImageClip extends Clip {
 
 export interface StickerClip extends Clip {
   kind: "sticker";
+}
+
+export interface FilterClip extends Clip {
+  kind: "filter";
+  name: string;
+  intensity: number; // 0.0 to 1.0
+  swatch?: string;
 }
 
 /** Word-level timestamp for karaoke-style caption highlighting */
@@ -252,6 +261,7 @@ export interface TextClip extends Clip {
   paddingY: number;
   styleId?: string;
   templateId?: string;
+  customization?: any;
   /** Role of the text clip: caption for subtitles, title for decorative text/graphics */
   textRole?: "caption" | "title";
   /** Word-level timestamps for karaoke-style caption highlighting (optional) */

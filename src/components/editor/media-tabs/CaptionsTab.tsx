@@ -24,6 +24,10 @@ export const CaptionsTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
 
   const mediaAssets = project?.mediaAssets || [];
 
+  // Check model status for helpful UI hints
+  const selectedModel = captionSettings.activeModel || "tiny";
+  const isModelDownloaded = captionSettings.models[selectedModel]?.status === "downloaded";
+
   // Find the text track designated for captions
   const captionTrack = tracks.find((t) => t.type === "text" && (t.name.toLowerCase().includes("caption") || t.name.toLowerCase().includes("subtitle"))) || tracks.find((t) => t.type === "text");
 
@@ -151,6 +155,37 @@ export const CaptionsTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
     const model = captionSettings.activeModel || "tiny"; // Default to tiny if none selected
     const language = captionSettings.language || "auto"; // Default to auto-detect
 
+    console.log(`[CaptionsTab] Starting auto-generate with model: ${model}, language: ${language}`);
+
+    // Check if the selected model is marked as downloaded in store
+    const modelState = captionSettings.models[model];
+    if (modelState.status !== "downloaded") {
+      console.error(`[CaptionsTab] Model "${model}" status is: ${modelState.status}`);
+      setErrorMsg(`Whisper model "${model}" is not downloaded yet. Please go to Settings → Captions to download the model first.`);
+      // Open settings modal to help user
+      toggleSettingsModal();
+      return;
+    }
+
+    // Verify the model actually exists on disk (double-check)
+    try {
+      console.log(`[CaptionsTab] Verifying model "${model}" exists on disk...`);
+      const exists = await invoke<boolean>("verify_whisper_model_exists", { size: model });
+      console.log(`[CaptionsTab] Model verification result: ${exists}`);
+
+      if (!exists) {
+        console.error(`[CaptionsTab] Model "${model}" marked as downloaded but files not found on disk`);
+        setErrorMsg(`Model files for "${model}" not found on disk. The model may have been deleted or corrupted. Please re-download the model from Settings → Captions.`);
+        toggleSettingsModal();
+        return;
+      }
+    } catch (error) {
+      console.error(`[CaptionsTab] Failed to verify model:`, error);
+      setErrorMsg(`Failed to verify model files: ${error}. Please check Settings → Captions.`);
+      toggleSettingsModal();
+      return;
+    }
+
     // Find video or audio clips on the timeline
     const mediaClips = clips.filter((clip) => {
       const asset = mediaAssets.find((a) => a.id === clip.mediaId);
@@ -158,9 +193,12 @@ export const CaptionsTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
     });
 
     if (mediaClips.length === 0) {
+      console.warn(`[CaptionsTab] No media clips found on timeline`);
       setErrorMsg("No video or audio clips found on the timeline. Add media first.");
       return;
     }
+
+    console.log(`[CaptionsTab] Found ${mediaClips.length} media clips to process`);
 
     setErrorMsg(null);
     setIsGenerating(true);
@@ -184,27 +222,48 @@ export const CaptionsTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
         if (!asset) continue;
 
         try {
+          console.log(`[CaptionsTab] Processing clip: ${mediaClip.id}, asset: ${asset.path}`);
+
           // Extract audio from the clip
           const tempAudioPath = await invoke<string>("extract_audio_track", {
             path: asset.path,
           });
 
+          console.log(`[CaptionsTab] Audio extracted to: ${tempAudioPath}`);
+
           // Transcribe using Whisper with selected/default model and language
+          console.log(`[CaptionsTab] About to call transcribe_audio_local...`);
+          console.log(`[CaptionsTab] Parameters:`, {
+            audioPath: tempAudioPath,
+            modelSize: model,
+            language: language === "auto" ? null : language,
+            languageHints: captionSettings.languageHints?.length > 0 ? captionSettings.languageHints : null,
+          });
+
           const resultJsonStr = await invoke<string>("transcribe_audio_local", {
             audioPath: tempAudioPath,
             modelSize: model,
             language: language === "auto" ? null : language,
+            languageHints: captionSettings.languageHints?.length > 0 ? captionSettings.languageHints : null,
           });
 
+          console.log(`[CaptionsTab] Transcription completed, result:`, resultJsonStr);
           const result = JSON.parse(resultJsonStr);
 
           if (result.error) {
             console.error(`Failed to transcribe ${mediaClip.id}:`, result.error);
+            setErrorMsg(`Transcription error: ${result.error}`);
             continue;
           }
 
           // Add segments to timeline
           const segments = result.segments || [];
+          console.log(`[CaptionsTab] Found ${segments.length} segments`);
+
+          if (segments.length === 0) {
+            console.warn(`[CaptionsTab] No segments found in transcription result`);
+          }
+
           withBatch(() => {
             segments.forEach((seg: any) => {
               const relativeStart = seg.start - mediaClip.trimIn;
@@ -229,21 +288,24 @@ export const CaptionsTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
                   canvasWidth,
                   canvasHeight,
                   fontSize: 32,
-                  bold: true,
+                  bold: false,
                   position: "bottom",
                   textRole: "caption",
                   words, // Include word-level timestamps
-                  styleId: "neon-crimson",
-                  fontFamily: "Outfit Variable",
+                  styleId: undefined,
+                  fontFamily: "Inter",
                 });
 
                 addClip(textClip);
                 totalCaptions++;
+                console.log(`[CaptionsTab] Added caption: "${seg.text}"`);
               }
             });
           });
         } catch (clipError: any) {
-          console.error(`Error processing clip ${mediaClip.id}:`, clipError);
+          console.error(`[CaptionsTab] Error processing clip ${mediaClip.id}:`, clipError);
+          console.error(`[CaptionsTab] Error stack:`, clipError.stack);
+          setErrorMsg(`Error: ${clipError.message || clipError}`);
         }
       }
 
@@ -253,6 +315,8 @@ export const CaptionsTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
         setErrorMsg("No captions were generated. Please check your audio contains speech.");
       }
     } catch (error: any) {
+      console.error(`[CaptionsTab] Top-level error:`, error);
+      console.error(`[CaptionsTab] Error stack:`, error.stack);
       setErrorMsg(error.message || "Failed to generate captions.");
     } finally {
       setIsGenerating(false);
@@ -287,16 +351,31 @@ export const CaptionsTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
       </div>
 
       {/* Auto-Generate Section — Zero Config UX */}
-      <div className="relative">
-        <Button variant="default" size="sm" className="w-full bg-accent hover:bg-accent/80 text-white flex items-center justify-center gap-1.5" onClick={handleAutoGenerate} disabled={isGenerating}>
-          <Sparkles className="w-4 h-4" />
-          {isGenerating ? "Generating..." : "Auto-Generate Captions"}
-        </Button>
+      <div className="space-y-2">
+        {!isModelDownloaded && (
+          <div className="p-2.5 bg-yellow-500/10 border border-yellow-500/25 rounded-lg text-yellow-200 text-xs flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="font-semibold">Whisper Model Required</p>
+              <p className="mt-1 opacity-90">The "{selectedModel}" model needs to be downloaded before generating captions.</p>
+              <button onClick={toggleSettingsModal} className="mt-2 px-2 py-1 bg-yellow-500/20 hover:bg-yellow-500/30 rounded text-xs font-semibold transition-colors">
+                Download Model in Settings
+              </button>
+            </div>
+          </div>
+        )}
 
-        {/* Settings gear — subtle, non-blocking */}
-        <button onClick={toggleSettingsModal} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 opacity-40 hover:opacity-100 transition-opacity" title="Caption settings">
-          <Settings className="w-3.5 h-3.5 text-white" />
-        </button>
+        <div className="relative">
+          <Button variant="default" size="sm" className="w-full bg-accent hover:bg-accent/80 text-white flex items-center justify-center gap-1.5" onClick={handleAutoGenerate} disabled={isGenerating}>
+            <Sparkles className="w-4 h-4" />
+            {isGenerating ? "Generating..." : "Auto-Generate Captions"}
+          </Button>
+
+          {/* Settings gear — subtle, non-blocking */}
+          <button onClick={toggleSettingsModal} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 opacity-40 hover:opacity-100 transition-opacity" title="Caption settings">
+            <Settings className="w-3.5 h-3.5 text-white" />
+          </button>
+        </div>
       </div>
 
       <Button variant="secondary" size="sm" className="w-full flex items-center justify-center gap-1.5" onClick={handleAddManualCaption}>
@@ -305,9 +384,18 @@ export const CaptionsTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
       </Button>
 
       {errorMsg && (
-        <div className="p-2.5 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg flex items-start gap-2 text-xs">
-          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-          <span>{errorMsg}</span>
+        <div className="p-2.5 bg-destructive/10 border border-destructive/20 text-destructive rounded-lg text-xs">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p>{errorMsg}</p>
+              {errorMsg.includes("not downloaded") && (
+                <button onClick={toggleSettingsModal} className="mt-2 px-2 py-1 bg-accent/20 hover:bg-accent/30 text-accent rounded text-xs font-semibold transition-colors">
+                  Open Settings to Download Model
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

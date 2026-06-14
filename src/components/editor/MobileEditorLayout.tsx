@@ -8,6 +8,7 @@ import { Timeline } from "./timeline/Timeline";
 import { BottomSheet } from "../ui/BottomSheet";
 import { getInsertIndexForNewTrack, useTimelineStore } from "@/store/timelineStore";
 import { useProjectStore } from "@/store/projectStore";
+import { generateId } from "@/lib/utils/id";
 import { useUIStore } from "@/store/uiStore";
 import { useHistoryStore } from "@/store/historyStore";
 import { useMediaImport } from "@/hooks/useMediaImport";
@@ -21,6 +22,7 @@ import type { MediaAsset } from "@/types";
 import { useAudioLibraryStore } from "@/features/audio-library/store/audioLibraryStore";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStickersStore } from "@/features/stickers/store/stickersStore";
+import { useVideoEffectsStore } from "@/features/video-effects/store/videoEffectsStore";
 
 export const MobileEditorLayout: React.FC = () => {
   const { tracks, clips, addClip, addTrack, insertTrackAt, getTimelineEndTime, createTransitionBetweenClips } = useTimelineStore();
@@ -96,21 +98,18 @@ export const MobileEditorLayout: React.FC = () => {
 
       addClip(newClip);
     } else if (type === "text") {
-      const sequenceEndTime = getTimelineEndTime();
-      const playheadTime = getPlaybackClock().time;
-      const startTime = Math.max(0, Math.min(playheadTime, Math.max(0, sequenceEndTime)));
-      const firstUnlockedTextTrack = tracks.find((track) => track.type === "text" && !track.locked);
-      let targetTrackId: string | null = firstUnlockedTextTrack?.id ?? null;
+      // Text clips follow the same placement policy semantics:
+      // playhead-first, no overwrite, create track when occupied.
+      const placement = resolveAddToTimelinePlacement({
+        asset: { type: "video", id: item.id, trackType: "text" },
+        tracks,
+        clips,
+        playheadTime: getPlaybackClock().time,
+        sequenceEndTime: getTimelineEndTime(),
+      });
 
-      if (targetTrackId) {
-        const targetTrackClips = clips.filter((clip) => clip.trackId === targetTrackId);
-        const occupiedAtPlayhead = targetTrackClips.some((clip) => clip.startTime <= startTime && startTime < clip.startTime + clip.duration);
-        if (occupiedAtPlayhead) {
-          targetTrackId = null;
-        }
-      }
-
-      if (!targetTrackId) {
+      let targetTrackId = placement.targetTrackId;
+      if (placement.shouldCreateTrack || !targetTrackId) {
         const latestTracks = useTimelineStore.getState().tracks;
         const insertIndex = getInsertIndexForNewTrack(latestTracks, "text");
         targetTrackId = insertTrackAt("text", insertIndex);
@@ -128,7 +127,7 @@ export const MobileEditorLayout: React.FC = () => {
 
       const textClip = createTextClip({
         trackId: targetTrackId,
-        startTime,
+        startTime: placement.startTime,
         duration: 5.0,
         text: item.text || item.name || "Text",
         canvasWidth: project?.canvasWidth || 1920,
@@ -144,6 +143,7 @@ export const MobileEditorLayout: React.FC = () => {
         background: item.background,
         styleId: item.styleId,
         templateId: item.templateId,
+        customization: item.customization,
       });
 
       addClip(textClip);
@@ -288,6 +288,59 @@ export const MobileEditorLayout: React.FC = () => {
       } else {
         useProjectStore.getState().showToast(`${item?.name || "Transition"} added`);
       }
+    } else if (type === "filters") {
+      // Filter must be downloaded first
+      const cachedFilter = useVideoEffectsStore.getState().getCachedFilter(item.id);
+
+      if (!cachedFilter) {
+        console.error("[MobileEditorLayout] Filter not downloaded yet:", item.id);
+        useProjectStore.getState().showToast("Filter not downloaded yet", "warning");
+        return;
+      }
+
+      // Filter clips follow the same placement policy semantics:
+      // playhead-first, no overwrite, create track when occupied.
+      const placement = resolveAddToTimelinePlacement({
+        asset: { type: "video", id: item.id, trackType: "filter" },
+        tracks,
+        clips,
+        playheadTime: getPlaybackClock().time,
+        sequenceEndTime: getTimelineEndTime(),
+      });
+
+      let targetTrackId = placement.targetTrackId;
+      if (placement.shouldCreateTrack || !targetTrackId) {
+        const latestTracks = useTimelineStore.getState().tracks;
+        const insertIndex = getInsertIndexForNewTrack(latestTracks, "filter");
+        targetTrackId = insertTrackAt("filter", insertIndex);
+      }
+
+      if (!targetTrackId) return;
+
+      const defaultIntensity = item.intensity?.default !== undefined ? item.intensity.default / 100 : 0.8;
+
+      const filterClip = {
+        id: generateId("filter-clip"),
+        trackId: targetTrackId,
+        mediaId: item.id,
+        startTime: placement.startTime,
+        duration: 5.0,
+        trimIn: 0,
+        trimOut: 5.0,
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+        opacity: 1.0,
+        rotation: 0,
+        kind: "filter" as const,
+        name: cachedFilter.filter.name || "Filter",
+        intensity: defaultIntensity,
+        swatch: cachedFilter.filter.swatch || "",
+      };
+
+      addClip(filterClip as any);
+      useProjectStore.getState().showToast(`Added ${cachedFilter.filter.name} filter to timeline`);
     }
   };
 

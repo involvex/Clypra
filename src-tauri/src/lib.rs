@@ -22,12 +22,17 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_persisted_scope::init())
         .setup(|app| {
+            // Initialize thumbnail engine
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 if let Ok(dir) = handle.path().app_cache_dir() {
                     let _ = init_thumbnail_engine(dir).await;
                 }
             });
+            
+            // Initialize Whisper download state
+            app.manage(whisper::init_download_state());
+            
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -67,6 +72,7 @@ pub fn run() {
             delete_whisper_model,
             list_downloaded_models,
             cancel_whisper_download,
+            verify_whisper_model_exists,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

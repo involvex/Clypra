@@ -44,6 +44,7 @@ const traceSelect = (...args: unknown[]) => {
 interface UIStore {
   selectedClipIds: string[]; // Multi-select support
   selectedGapId: string | null; // Gap selection (exclusive with clip selection)
+  selectedTransitionId: string | null; // Selected transition
   selectedTrackId: string | null;
   // Note: previewMediaId is used for MediaPanel selection state only.
   previewMediaId: string | null;
@@ -61,6 +62,7 @@ interface UIStore {
   selectClip: (clipId: string | null) => void;
   toggleClipSelection: (clipId: string) => void;
   selectGap: (gapId: string | null) => void;
+  selectTransition: (transitionId: string | null) => void;
   clearSelection: () => void;
   selectTrack: (trackId: string | null) => void;
   setPreviewMedia: (mediaId: string | null) => void;
@@ -84,6 +86,7 @@ interface UIStore {
 export const useUIStore = create<UIStore>((set, get) => ({
   selectedClipIds: [],
   selectedGapId: null,
+  selectedTransitionId: null,
   selectedTrackId: null,
   previewMediaId: null,
   activePanel: "media",
@@ -102,6 +105,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
     set({
       selectedClipIds: clipId ? [clipId] : [],
       selectedGapId: null, // Clear gap selection when selecting clip
+      selectedTransitionId: null, // Clear transition selection when selecting clip
     });
   },
 
@@ -110,6 +114,15 @@ export const useUIStore = create<UIStore>((set, get) => ({
     set({
       selectedGapId: gapId,
       selectedClipIds: [], // Clear clip selection when selecting gap
+      selectedTransitionId: null, // Clear transition selection when selecting gap
+    });
+  },
+
+  selectTransition: (transitionId) => {
+    set({
+      selectedTransitionId: transitionId,
+      selectedClipIds: [],
+      selectedGapId: null,
     });
   },
 
@@ -119,6 +132,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
       traceSelect("toggleClipSelection", { clipId, already, prev: state.selectedClipIds });
       return {
         selectedClipIds: already ? state.selectedClipIds.filter((id) => id !== clipId) : [...state.selectedClipIds, clipId],
+        selectedTransitionId: null,
       };
     });
   },
@@ -128,6 +142,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
     set({
       selectedClipIds: [],
       selectedGapId: null,
+      selectedTransitionId: null,
     });
   },
 

@@ -7,6 +7,8 @@ import type { TextEffectDefinition } from "@/features/text-effects/types/types";
 import type { TextClip } from "@/types";
 import { PropertySlider } from "./primitives/PropertySlider";
 import { PropertySection } from "./primitives/PropertySection";
+import { useTemplateStore } from "@/features/text-templates/templateStore";
+import { useTimelineStore } from "@/store/timelineStore";
 
 // Extracted font list for maintainability
 const SYSTEM_FONTS = [
@@ -86,7 +88,101 @@ interface TextStyleSectionProps {
   deletePreset: (id: string) => void;
 }
 
-export const TextStyleSection: React.FC<TextStyleSectionProps> = ({ textClip, presets, newPresetName, setNewPresetName, handleUpdate, handleUpdateMultiple, handleApplyPreset, savePreset, deletePreset }) => {
+export const TextStyleSection: React.FC<TextStyleSectionProps> = ({ textClip, presets, newPresetName, setNewPresetName, handleUpdate: originalHandleUpdate, handleUpdateMultiple: originalHandleUpdateMultiple, handleApplyPreset, savePreset, deletePreset }) => {
+  const [applyToAll, setApplyToAll] = React.useState(false);
+  const { templates } = useTemplateStore();
+  const templateDef = templates.find((t) => t.id === textClip.templateId);
+
+  // Styling properties to batch-update across all caption clips on the same track
+  const CAPTION_STYLE_KEYS = [
+    "fontFamily",
+    "fontSize",
+    "color",
+    "fontWeight",
+    "fontStyle",
+    "stroke",
+    "shadow",
+    "background",
+    "lineHeight",
+    "letterSpacing",
+    "align",
+    "valign",
+  ];
+
+  const handleUpdate = (key: string, value: any) => {
+    if (applyToAll && textClip.textRole === "caption" && CAPTION_STYLE_KEYS.includes(key)) {
+      const { clips } = useTimelineStore.getState();
+      const trackCaptions = clips.filter(
+        (c) => c.trackId === textClip.trackId && (c as any).textRole === "caption"
+      );
+      
+      originalHandleUpdate(key, value);
+      
+      trackCaptions.forEach((c) => {
+        if (c.id !== textClip.id) {
+          useTimelineStore.getState().updateClip(c.id, { [key]: value });
+        }
+      });
+    } else {
+      originalHandleUpdate(key, value);
+    }
+  };
+
+  const handleUpdateMultiple = (fields: Record<string, any>) => {
+    const hasStyleField = Object.keys(fields).some(k => CAPTION_STYLE_KEYS.includes(k));
+    if (applyToAll && textClip.textRole === "caption" && hasStyleField) {
+      const { clips } = useTimelineStore.getState();
+      const trackCaptions = clips.filter(
+        (c) => c.trackId === textClip.trackId && (c as any).textRole === "caption"
+      );
+      
+      originalHandleUpdateMultiple(fields);
+      
+      const styleFields: Record<string, any> = {};
+      Object.entries(fields).forEach(([k, v]) => {
+        if (CAPTION_STYLE_KEYS.includes(k)) {
+          styleFields[k] = v;
+        }
+      });
+
+      trackCaptions.forEach((c) => {
+        if (c.id !== textClip.id) {
+          useTimelineStore.getState().updateClip(c.id, styleFields);
+        }
+      });
+    } else {
+      originalHandleUpdateMultiple(fields);
+    }
+  };
+
+  const customization = textClip.customization || {
+    primaryText: textClip.text || "",
+    secondaryText: "",
+    accentText: "",
+    primaryColor: "#ffffff",
+    secondaryColor: "#ffffff",
+  };
+
+  const updateCustomizationField = (key: string, value: any) => {
+    const nextCustomization = {
+      ...customization,
+      [key]: value
+    };
+    const updates: Record<string, any> = {
+      customization: nextCustomization
+    };
+    if (key === "primaryText") {
+      updates.text = value;
+    }
+    handleUpdateMultiple(updates);
+  };
+
+  const textLayers = templateDef?.textLayers || [
+    { role: "primary", defaultText: "Title", layerName: "Primary" },
+    { role: "secondary", defaultText: "Subtitle", layerName: "Secondary" },
+    { role: "accent", defaultText: "Accent", layerName: "Accent" }
+  ];
+
   // Quick switch text effects
   const applyEffectPreset = (effect: TextEffectDefinition) => {
     handleUpdateMultiple({
@@ -114,10 +210,80 @@ export const TextStyleSection: React.FC<TextStyleSectionProps> = ({ textClip, pr
   return (
     <div className="space-y-3">
       {/* Text Content */}
-      <div>
-        <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider block mb-1.5 select-none">Text Content</label>
-        <textarea value={textClip.text || ""} onChange={(e) => handleUpdate("text", e.target.value)} rows={3} placeholder="CLYPRA" className="w-full bg-surface-raised border border-border/60 rounded-lg p-2.5 text-xs text-text-primary outline-none focus:border-accent focus:ring-1 focus:ring-accent/20 resize-none selectable transition-colors" />
-      </div>
+      {textClip.templateId ? (
+        <div className="space-y-3 p-3 bg-surface-raised/20 border border-border/40 rounded-xl">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[10px] font-bold text-accent uppercase tracking-wider block select-none">
+              Template Customization
+            </span>
+          </div>
+
+          {/* Text Inputs */}
+          {textLayers.map((layer) => {
+            const roleKey = layer.role === "primary" ? "primaryText" : layer.role === "secondary" ? "secondaryText" : "accentText";
+            const label = layer.role === "primary" ? "Primary Text" : layer.role === "secondary" ? "Secondary Text" : "Accent Text";
+            const val = customization[roleKey] || "";
+
+            return (
+              <div key={layer.role} className="space-y-1">
+                <label className="text-[9px] font-medium text-text-muted select-none">
+                  {label} ({layer.layerName})
+                </label>
+                <input
+                  type="text"
+                  value={val}
+                  onChange={(e) => updateCustomizationField(roleKey, e.target.value)}
+                  className="w-full bg-surface-raised border border-border/60 rounded-md px-2.5 py-1.5 text-xs text-text-primary outline-none focus:border-accent selectable"
+                  placeholder={layer.defaultText}
+                />
+              </div>
+            );
+          })}
+
+          <hr className="border-border/40 my-2" />
+
+          {/* Color Inputs */}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[9px] font-medium text-text-muted select-none block mb-1">
+                Primary Color
+              </label>
+              <div className="flex items-center gap-1.5 font-mono">
+                <input
+                  type="color"
+                  value={customization.primaryColor || "#ffffff"}
+                  onChange={(e) => updateCustomizationField("primaryColor", e.target.value)}
+                  className="w-8 h-8 bg-transparent border-0 cursor-pointer rounded overflow-hidden"
+                />
+                <span className="text-[10px] text-text-muted">
+                  {customization.primaryColor || "#ffffff"}
+                </span>
+              </div>
+            </div>
+            <div>
+              <label className="text-[9px] font-medium text-text-muted select-none block mb-1">
+                Secondary Color
+              </label>
+              <div className="flex items-center gap-1.5 font-mono">
+                <input
+                  type="color"
+                  value={customization.secondaryColor || "#ffffff"}
+                  onChange={(e) => updateCustomizationField("secondaryColor", e.target.value)}
+                  className="w-8 h-8 bg-transparent border-0 cursor-pointer rounded overflow-hidden"
+                />
+                <span className="text-[10px] text-text-muted">
+                  {customization.secondaryColor || "#ffffff"}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider block mb-1.5 select-none">Text Content</label>
+          <textarea value={textClip.text || ""} onChange={(e) => handleUpdate("text", e.target.value)} rows={3} placeholder="CLYPRA" className="w-full bg-surface-raised border border-border/60 rounded-lg p-2.5 text-xs text-text-primary outline-none focus:border-accent focus:ring-1 focus:ring-accent/20 resize-none selectable transition-colors" />
+        </div>
+      )}
 
       {/* Style Presets */}
       <PropertySection title="Style Presets" icon={<Layers className="w-3.5 h-3.5" />} defaultCollapsed>
@@ -457,6 +623,26 @@ export const TextStyleSection: React.FC<TextStyleSectionProps> = ({ textClip, pr
           ))}
         </div>
       </PropertySection>
+
+      {/* Batch Styling for captions */}
+      {textClip.textRole === "caption" && (
+        <div className="flex items-center justify-between p-2.5 bg-surface-raised/35 border border-border/30 rounded-lg select-none">
+          <div className="flex flex-col">
+            <span className="text-xs font-semibold text-text-primary">Apply to all captions</span>
+            <span className="text-[9px] text-text-muted">Broadcast styles to all clips on this track</span>
+          </div>
+          <button
+            onClick={() => setApplyToAll(!applyToAll)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
+              applyToAll
+                ? "bg-accent/15 text-accent border border-accent/30 hover:bg-accent/25"
+                : "bg-surface-raised border border-border/60 text-text-muted hover:text-text-primary hover:bg-white/[0.04]"
+            }`}
+          >
+            {applyToAll ? "Active" : "Inactive"}
+          </button>
+        </div>
+      )}
     </div>
   );
 };

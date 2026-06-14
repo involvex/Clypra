@@ -6,6 +6,7 @@ import { PropertiesPanel } from "./PropertiesPanel";
 import { Timeline } from "./timeline/Timeline";
 import { getInsertIndexForNewTrack, useTimelineStore } from "@/store/timelineStore";
 import { useProjectStore } from "@/store/projectStore";
+import { generateId } from "@/lib/utils/id";
 import { createClipFromAsset } from "@/lib/timeline/timelineClip";
 import { createTextClip, TEXT_PRESETS } from "@/lib/text/textClip";
 import { autoAdaptSequenceForFirstVisualClip } from "@/lib/sequence/sequenceAutoAspect";
@@ -17,6 +18,7 @@ import type { MediaAsset } from "@/types";
 import { useUIStore } from "@/store/uiStore";
 import { useAudioLibraryStore } from "@/features/audio-library/store/audioLibraryStore";
 import { useStickersStore } from "@/features/stickers/store/stickersStore";
+import { useVideoEffectsStore } from "@/features/video-effects/store/videoEffectsStore";
 
 export const EditorLayout: React.FC = () => {
   const { width } = useWindowSize();
@@ -25,11 +27,23 @@ export const EditorLayout: React.FC = () => {
     return <MobileEditorLayout />;
   }
 
-  const { tracks, clips, addClip, updateClip, insertTrackAt, getTimelineEndTime, createTransitionBetweenClips } = useTimelineStore();
+  // Only subscribe to actions, not state - prevents re-renders when clips/tracks change
+  const addClip = useTimelineStore((s) => s.addClip);
+  const updateClip = useTimelineStore((s) => s.updateClip);
+  const insertTrackAt = useTimelineStore((s) => s.insertTrackAt);
+  const getTimelineEndTime = useTimelineStore((s) => s.getTimelineEndTime);
+  const createTransitionBetweenClips = useTimelineStore((s) => s.createTransitionBetweenClips);
+
+  // Read state only when needed in the handler (not as subscriptions)
+  const getTimelineState = () => {
+    const state = useTimelineStore.getState();
+    return { tracks: state.tracks, clips: state.clips };
+  };
   const { mediaAssets, project, updateProject, addMediaAsset } = useProjectStore();
   const { selectedClipIds } = useUIStore();
 
   const findAdjacentClipsAtPlayhead = () => {
+    const { tracks, clips } = getTimelineState();
     const playheadTime = getPlaybackClock().time;
     for (const track of tracks.filter((candidate) => candidate.type !== "audio" && !candidate.locked)) {
       const sorted = clips.filter((clip) => clip.trackId === track.id).sort((a, b) => a.startTime - b.startTime);
@@ -46,6 +60,9 @@ export const EditorLayout: React.FC = () => {
   const { getCachedFile } = useAudioLibraryStore();
 
   const handleAddToTimeline = (item: any, type: string) => {
+    // Get current timeline state
+    const { tracks, clips } = getTimelineState();
+
     // Handle different item types
     if (type === "media") {
       const mediaAsset = mediaAssets.find((asset) => asset.id === item.id);
@@ -91,21 +108,16 @@ export const EditorLayout: React.FC = () => {
     } else if (type === "text") {
       // Text clips follow the same placement policy semantics:
       // playhead-first, no overwrite, create track when occupied.
-      const sequenceEndTime = getTimelineEndTime();
-      const playheadTime = getPlaybackClock().time;
-      const startTime = Math.max(0, Math.min(playheadTime, Math.max(0, sequenceEndTime)));
-      const firstUnlockedTextTrack = tracks.find((track) => track.type === "text" && !track.locked);
-      let targetTrackId: string | null = firstUnlockedTextTrack?.id ?? null;
+      const placement = resolveAddToTimelinePlacement({
+        asset: { type: "video", id: item.id, trackType: "text" },
+        tracks,
+        clips,
+        playheadTime: getPlaybackClock().time,
+        sequenceEndTime: getTimelineEndTime(),
+      });
 
-      if (targetTrackId) {
-        const targetTrackClips = clips.filter((clip) => clip.trackId === targetTrackId);
-        const occupiedAtPlayhead = targetTrackClips.some((clip) => clip.startTime <= startTime && startTime < clip.startTime + clip.duration);
-        if (occupiedAtPlayhead) {
-          targetTrackId = null;
-        }
-      }
-
-      if (!targetTrackId) {
+      let targetTrackId = placement.targetTrackId;
+      if (placement.shouldCreateTrack || !targetTrackId) {
         const latestTracks = useTimelineStore.getState().tracks;
         const insertIndex = getInsertIndexForNewTrack(latestTracks, "text");
         targetTrackId = insertTrackAt("text", insertIndex);
@@ -125,7 +137,7 @@ export const EditorLayout: React.FC = () => {
       // Create text clip
       const textClip = createTextClip({
         trackId: targetTrackId,
-        startTime,
+        startTime: placement.startTime,
         duration: 5.0,
         text: item.text || item.name || "Text", // Use effect's default text first, then name as fallback
         canvasWidth: project?.canvasWidth || 1920,
@@ -143,6 +155,7 @@ export const EditorLayout: React.FC = () => {
         background: item.background,
         styleId: item.styleId,
         templateId: item.templateId,
+        customization: item.customization,
       });
 
       addClip(textClip);
@@ -289,7 +302,7 @@ export const EditorLayout: React.FC = () => {
       } else {
         useProjectStore.getState().showToast(`${item?.name || "Transition"} added`);
       }
-    } else if (type === "effects" || type === "filters") {
+    } else if (type === "effects") {
       const selectedClipId = selectedClipIds[0] ?? null;
       let targetClip = clips.find((c) => c.id === selectedClipId);
 
@@ -304,35 +317,94 @@ export const EditorLayout: React.FC = () => {
       }
 
       if (!targetClip) {
-        useProjectStore.getState().showToast(`Select a video or image clip to apply this ${type === "effects" ? "effect" : "filter"}`, "warning");
+        useProjectStore.getState().showToast("Select a video or image clip to apply this effect", "warning");
         return;
       }
 
       const asset = mediaAssets.find((a) => a.id === targetClip.mediaId);
       if (asset?.type !== "video" && asset?.type !== "image") {
-        useProjectStore.getState().showToast("Effects and filters can only be applied to video or image clips", "warning");
+        useProjectStore.getState().showToast("Effects can only be applied to video or image clips", "warning");
         return;
       }
 
-      if (type === "effects") {
-        const currentEffects = targetClip.effects || [];
-        const effectExists = currentEffects.some((fx) => fx.id === item.id);
+      const currentEffects = targetClip.effects || [];
+      const effectExists = currentEffects.some((fx) => fx.id === item.id);
 
-        if (effectExists) {
-          useProjectStore.getState().showToast(`Effect "${item.name}" is already applied`, "warning");
-          return;
-        }
-
-        const updatedEffects = [...currentEffects, { id: item.id, name: item.name, intensity: 0.5 }];
-
-        updateClip(targetClip.id, { effects: updatedEffects });
-        useProjectStore.getState().showToast(`Applied ${item.name} effect`);
-      } else {
-        updateClip(targetClip.id, {
-          filter: { id: item.id, name: item.name, intensity: 0.8 },
-        });
-        useProjectStore.getState().showToast(`Applied ${item.name} filter`);
+      if (effectExists) {
+        useProjectStore.getState().showToast(`Effect "${item.name}" is already applied`, "warning");
+        return;
       }
+
+      const updatedEffects = [
+        ...currentEffects,
+        {
+          id: item.id,
+          effectId: item.id,
+          type: "effect" as const,
+          renderer: item.renderer || item.id,
+          params: item.params || {},
+          name: item.name,
+          startTime: 0,
+          duration: targetClip.duration,
+          intensity: 0.5,
+        },
+      ];
+
+      updateClip(targetClip.id, { effects: updatedEffects });
+      useProjectStore.getState().showToast(`Applied ${item.name} effect`);
+    } else if (type === "filters") {
+      // Filter must be downloaded first
+      const cachedFilter = useVideoEffectsStore.getState().getCachedFilter(item.id);
+
+      if (!cachedFilter) {
+        console.error("[EditorLayout] Filter not downloaded yet:", item.id);
+        useProjectStore.getState().showToast("Filter not downloaded yet", "warning");
+        return;
+      }
+
+      // Filter clips follow the same placement policy semantics:
+      // playhead-first, no overwrite, create track when occupied.
+      const placement = resolveAddToTimelinePlacement({
+        asset: { type: "video", id: item.id, trackType: "filter" },
+        tracks,
+        clips,
+        playheadTime: getPlaybackClock().time,
+        sequenceEndTime: getTimelineEndTime(),
+      });
+
+      let targetTrackId = placement.targetTrackId;
+      if (placement.shouldCreateTrack || !targetTrackId) {
+        const latestTracks = useTimelineStore.getState().tracks;
+        const insertIndex = getInsertIndexForNewTrack(latestTracks, "filter");
+        targetTrackId = insertTrackAt("filter", insertIndex);
+      }
+
+      if (!targetTrackId) return;
+
+      const defaultIntensity = item.intensity?.default !== undefined ? item.intensity.default / 100 : 0.8;
+
+      const filterClip = {
+        id: generateId("filter-clip"),
+        trackId: targetTrackId,
+        mediaId: item.id,
+        startTime: placement.startTime,
+        duration: 5.0,
+        trimIn: 0,
+        trimOut: 5.0,
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+        opacity: 1.0,
+        rotation: 0,
+        kind: "filter" as const,
+        name: cachedFilter.filter.name || "Filter",
+        intensity: defaultIntensity,
+        swatch: cachedFilter.filter.swatch || "",
+      };
+
+      addClip(filterClip as any);
+      useProjectStore.getState().showToast(`Added ${cachedFilter.filter.name} filter`);
     }
   };
 

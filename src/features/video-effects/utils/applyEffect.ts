@@ -3,7 +3,8 @@
  */
 
 import { useTimelineStore } from "@/store/timelineStore";
-import type { EffectPreset, ClipEffect } from "../types";
+import type { EffectPreset } from "../types";
+import type { ClipEffect } from "@/types";
 import { generateId } from "@/lib/utils/id";
 
 export function applyEffectToClip(clipId: string, effect: EffectPreset): void {
@@ -17,7 +18,7 @@ export function applyEffectToClip(clipId: string, effect: EffectPreset): void {
 
   // Create effect data
   const clipEffect: ClipEffect = {
-    id: generateId(),
+    id: generateId("effect"),
     effectId: effect.id,
     type: "effect",
     renderer: effect.renderer,
