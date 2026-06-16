@@ -4,7 +4,7 @@ import { EnhancedMediaPanel } from "./media-panel/EnhancedMediaPanel";
 import { PreviewPanel } from "./preview/PreviewPanel";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { Timeline } from "./timeline/Timeline";
-import { getInsertIndexForNewTrack, useTimelineStore } from "@/store/timelineStore";
+import { getInsertIndexForNewTrack, getInsertIndexForNewTrackGrouped, useTimelineStore } from "@/store/timelineStore";
 import { useProjectStore } from "@/store/projectStore";
 import { generateId } from "@/lib/utils/id";
 import { createClipFromAsset } from "@/lib/timeline/timelineClip";
@@ -14,11 +14,11 @@ import { DEFAULT_PLACEMENT_POLICY, resolveAddToTimelinePlacement, resolveDefault
 import { getPlaybackClock } from "@/hooks/usePlaybackClock";
 import { useWindowSize } from "@/hooks/useWindowSize";
 import { MobileEditorLayout } from "./MobileEditorLayout";
-import type { MediaAsset } from "@/types";
+import type { MediaAsset, TrackType } from "@/types";
 import { useUIStore } from "@/store/uiStore";
 import { useAudioLibraryStore } from "@/features/audio-library/store/audioLibraryStore";
 import { useStickersStore } from "@/features/stickers/store/stickersStore";
-import { useVideoEffectsStore } from "@/features/video-effects/store/videoEffectsStore";
+import { filterCacheManager } from "@/features/filters/cache/filterCache";
 
 export const EditorLayout: React.FC = () => {
   const { width } = useWindowSize();
@@ -59,7 +59,7 @@ export const EditorLayout: React.FC = () => {
   };
   const { getCachedFile } = useAudioLibraryStore();
 
-  const handleAddToTimeline = (item: any, type: string) => {
+  const handleAddToTimeline = async (item: any, type: string) => {
     // Get current timeline state
     const { tracks, clips } = getTimelineState();
 
@@ -354,7 +354,7 @@ export const EditorLayout: React.FC = () => {
       useProjectStore.getState().showToast(`Applied ${item.name} effect`);
     } else if (type === "filters") {
       // Filter must be downloaded first
-      const cachedFilter = useVideoEffectsStore.getState().getCachedFilter(item.id);
+      const cachedFilter = filterCacheManager.getCached(item.id);
 
       if (!cachedFilter) {
         console.error("[EditorLayout] Filter not downloaded yet:", item.id);
@@ -375,7 +375,8 @@ export const EditorLayout: React.FC = () => {
       let targetTrackId = placement.targetTrackId;
       if (placement.shouldCreateTrack || !targetTrackId) {
         const latestTracks = useTimelineStore.getState().tracks;
-        const insertIndex = getInsertIndexForNewTrack(latestTracks, "filter");
+        const latestClips = useTimelineStore.getState().clips;
+        const insertIndex = getInsertIndexForNewTrackGrouped(latestTracks, latestClips, "filter", item.id);
         targetTrackId = insertTrackAt("filter", insertIndex);
       }
 
@@ -405,6 +406,68 @@ export const EditorLayout: React.FC = () => {
 
       addClip(filterClip as any);
       useProjectStore.getState().showToast(`Added ${cachedFilter.filter.name} filter`);
+    } else if (type === "video-effects" || type === "body-effects") {
+      console.log("[EditorLayout] Handling video/body effect:", { type, itemId: item.id, itemName: item.name });
+
+      // Effects are now created directly on timeline without downloading
+      // The effect data comes from the engine's effectsRegistry
+
+      console.log("[EditorLayout] Creating effect clip for:", item.name);
+
+      // Create effect clip on timeline (same pattern as filter clips)
+      const effectTrackType: TrackType = type === "body-effects" ? "body-effect" : "video-effect";
+
+      const placement = resolveAddToTimelinePlacement({
+        asset: { type: "video", id: item.id, trackType: effectTrackType },
+        tracks,
+        clips,
+        playheadTime: getPlaybackClock().time,
+        sequenceEndTime: getTimelineEndTime(),
+      });
+
+      let targetTrackId = placement.targetTrackId;
+      if (placement.shouldCreateTrack || !targetTrackId) {
+        const latestTracks = useTimelineStore.getState().tracks;
+        const latestClips = useTimelineStore.getState().clips;
+        const insertIndex = getInsertIndexForNewTrackGrouped(latestTracks, latestClips, effectTrackType, item.id);
+        targetTrackId = insertTrackAt(effectTrackType, insertIndex);
+      }
+
+      if (!targetTrackId) {
+        console.error("[EditorLayout] Failed to create track for effect");
+        return;
+      }
+
+      const defaultIntensity = item.intensity?.default !== undefined ? item.intensity.default / 100 : 0.8;
+
+      const effectClip = {
+        id: generateId(type === "body-effects" ? "body-effect-clip" : "video-effect-clip"),
+        trackId: targetTrackId,
+        mediaId: item.id,
+        startTime: placement.startTime,
+        duration: 5.0,
+        trimIn: 0,
+        trimOut: 5.0,
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+        opacity: 1.0,
+        rotation: 0,
+        kind: type === "body-effects" ? ("body-effect" as const) : ("video-effect" as const),
+        name: item.name || "Effect",
+        intensity: defaultIntensity,
+        renderer: item.renderer || item.id,
+        params: item.params || {},
+        ...(type === "body-effects" && item.requirements ? { requirements: item.requirements } : {}),
+      };
+
+      console.log("[EditorLayout] Creating effect clip:", effectClip);
+
+      addClip(effectClip as any);
+      useProjectStore.getState().showToast(`Added ${item.name} effect`);
+
+      console.log("[EditorLayout] Effect clip added successfully");
     }
   };
 

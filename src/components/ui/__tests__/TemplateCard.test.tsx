@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { TemplateCard } from "../TemplateCard";
-import { ClypraApi } from "@/features/text-effects/api/clypraApi";
+import { TextEffectsApi } from "@/features/text-effects/api/textEffectsApi";
 import type { TemplateDefinition } from "@/features/text-templates/types";
 
 // Mock the LottiePlayer component
@@ -52,7 +52,7 @@ describe("TemplateCard Component", () => {
 
   it("gracefully falls back to thumbnailUrl when thumbnail is empty", () => {
     render(<TemplateCard {...defaultProps} />);
-    
+
     const img = screen.getByRole("img") as HTMLImageElement;
     expect(img).toBeInTheDocument();
     expect(img.src).toBe("http://example.com/template-thumbnail.png");
@@ -61,10 +61,10 @@ describe("TemplateCard Component", () => {
 
   it("prefetches Lottie data from API on mouse enter/hover", async () => {
     const mockLottieData = { v: "5.5.0", fr: 30, ip: 0, op: 60 };
-    vi.mocked(ClypraApi.getLottieTemplate).mockResolvedValue(mockLottieData);
+    vi.mocked(TextEffectsApi.getLottieTemplate).mockResolvedValue(mockLottieData);
 
     render(<TemplateCard {...defaultProps} />);
-    
+
     const card = screen.getByRole("img").closest("div");
     expect(card).toBeDefined();
     if (card) {
@@ -75,37 +75,37 @@ describe("TemplateCard Component", () => {
     expect(screen.getByText("Loading...")).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(ClypraApi.getLottieTemplate).toHaveBeenCalledWith("lower-third", "template-1");
+      expect(TextEffectsApi.getLottieTemplate).toHaveBeenCalledWith("lower-third", "template-1");
       expect(screen.getByTestId("mock-lottie-player")).toBeInTheDocument();
     });
   });
 
   it("calls onPreview when clicked", () => {
     render(<TemplateCard {...defaultProps} />);
-    
+
     const card = screen.getByRole("img").closest("div");
     if (card) fireEvent.click(card);
-    
+
     expect(defaultProps.onPreview).toHaveBeenCalledTimes(1);
   });
 
   it("calls onFavorite when favorite star is clicked", () => {
     render(<TemplateCard {...defaultProps} />);
-    
+
     const buttons = screen.getAllByRole("button");
     const starBtn = buttons[0];
     fireEvent.click(starBtn);
-    
+
     expect(defaultProps.onFavorite).toHaveBeenCalledTimes(1);
   });
 
   it("calls onApply when the apply/download button is clicked", () => {
     render(<TemplateCard {...defaultProps} />);
-    
+
     const buttons = screen.getAllByRole("button");
     const downloadBtn = buttons[1];
     fireEvent.click(downloadBtn);
-    
+
     expect(defaultProps.onApply).toHaveBeenCalledTimes(1);
   });
 

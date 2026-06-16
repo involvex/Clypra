@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { Music, Smile, Wand2, MessageSquare, Filter } from "lucide-react";
-import { MediaTab, AudioTab, TextTab, StickersTab, FiltersTab, CaptionsTab, type TabType, MediaTabProps } from "../media-tabs";
+import { Music, Smile, Wand2, MessageSquare, Filter, Shuffle } from "lucide-react";
+import { MediaTab, AudioTab, TextTab, StickersTab, FiltersTab, TransitionsTab, CaptionsTab, type TabType, MediaTabProps } from "../media-tabs";
 import { EffectsPanel } from "@/features/video-effects/components/EffectsPanel";
 import { TextIcon, YouTubeIcon } from "../../ui/icons";
 
@@ -18,6 +18,7 @@ export const EnhancedMediaPanel: React.FC<MediaTabProps> = ({ onAddToTimeline, i
     { id: "stickers" as const, icon: Smile, label: "Stickers" },
     { id: "effects" as const, icon: Wand2, label: "Effects" },
     { id: "filters" as const, icon: Filter, label: "Filters" },
+    { id: "transitions" as const, icon: Shuffle, label: "Transitions" },
     { id: "captions" as const, icon: MessageSquare, label: "Captions" },
   ];
 
@@ -53,6 +54,7 @@ export const EnhancedMediaPanel: React.FC<MediaTabProps> = ({ onAddToTimeline, i
         {activeTab === "stickers" && <StickersTab onAddToTimeline={onAddToTimeline} />}
         {activeTab === "effects" && <EffectsPanel />}
         {activeTab === "filters" && <FiltersTab onAddToTimeline={onAddToTimeline} />}
+        {activeTab === "transitions" && <TransitionsTab onAddToTimeline={onAddToTimeline} />}
         {activeTab === "captions" && <CaptionsTab onAddToTimeline={onAddToTimeline} />}
       </div>
     </div>

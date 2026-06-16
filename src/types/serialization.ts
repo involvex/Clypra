@@ -16,6 +16,7 @@
  */
 
 import type { Project, MediaAsset, Track, Clip, AspectRatio, TransitionTimelineItem } from "./index";
+import type { Gap } from "./gap";
 
 // ============================================================================
 // RUST TYPES (snake_case)
@@ -42,6 +43,7 @@ export interface RustProject {
   tracks?: RustTrack[];
   clips?: RustClip[];
   transitions?: TransitionTimelineItem[];
+  gaps?: RustGap[];
   timeline_schema_version?: number | null;
 }
 
@@ -104,6 +106,25 @@ export interface RustClip {
   fitMode?: "contain" | "cover" | "fill" | "stretch" | "original";
   volume?: number;
   kind?: string;
+}
+
+/**
+ * Rust representation of a Gap (snake_case fields)
+ */
+export interface RustGap {
+  id: string;
+  track_id: string;
+  start_time: number;
+  duration: number;
+  type: "manual" | "auto" | "protected";
+  source: "user-insert" | "clip-drag" | "clip-delete" | "imported" | "unknown";
+  protected: boolean;
+  metadata?: {
+    created_at?: number;
+    note?: string;
+    replaced_clip_id?: string;
+    user_created?: boolean;
+  };
 }
 
 // ============================================================================
@@ -227,6 +248,32 @@ export function fromRustClip(rust: RustClip): Clip {
   return clip as Clip;
 }
 
+/**
+ * Convert Rust Gap to Frontend Gap
+ *
+ * @param rust - Gap data from Rust backend (snake_case)
+ * @returns Frontend Gap (camelCase)
+ */
+export function fromRustGap(rust: RustGap): Gap {
+  return {
+    id: rust.id,
+    trackId: rust.track_id,
+    startTime: rust.start_time,
+    duration: rust.duration,
+    type: rust.type,
+    source: rust.source,
+    protected: rust.protected,
+    metadata: rust.metadata
+      ? {
+          createdAt: rust.metadata.created_at,
+          note: rust.metadata.note,
+          replacedClipId: rust.metadata.replaced_clip_id,
+          userCreated: rust.metadata.user_created,
+        }
+      : undefined,
+  };
+}
+
 // ============================================================================
 // FRONTEND → RUST CONVERTERS
 // ============================================================================
@@ -245,6 +292,7 @@ export function toRustProject(
     clips?: Clip[];
     mediaAssets?: MediaAsset[];
     transitions?: TransitionTimelineItem[];
+    gaps?: Gap[];
   },
 ): RustProject {
   return {
@@ -261,6 +309,7 @@ export function toRustProject(
     tracks: options?.tracks?.map(toRustTrack) ?? [],
     clips: options?.clips?.map(toRustClip) ?? [],
     transitions: options?.transitions ?? [],
+    gaps: options?.gaps?.map(toRustGap) ?? [],
     timeline_schema_version: frontend.timelineSchemaVersion ?? 1,
   };
 }
@@ -295,9 +344,18 @@ export function toRustMediaAsset(frontend: MediaAsset): RustMediaAsset {
  * @returns Rust Track (snake_case)
  */
 export function toRustTrack(frontend: Track): RustTrack {
+  // Map new track types to existing Rust types
+  let rustType: RustTrack["type"];
+
+  if (frontend.type === "video-effect" || frontend.type === "body-effect" || frontend.type === "animated-overlay") {
+    rustType = "video"; // Map effect/overlay tracks to video type for Rust
+  } else {
+    rustType = frontend.type as RustTrack["type"];
+  }
+
   return {
     id: frontend.id,
-    type: frontend.type,
+    type: rustType,
     name: frontend.name,
     muted: frontend.muted,
     locked: frontend.locked,
@@ -344,4 +402,30 @@ export function toRustClip(frontend: Clip): RustClip {
     delete rust.styleDefinition;
   }
   return rust as RustClip;
+}
+
+/**
+ * Convert Frontend Gap to Rust Gap
+ *
+ * @param frontend - Frontend Gap (camelCase)
+ * @returns Rust Gap (snake_case)
+ */
+export function toRustGap(frontend: Gap): RustGap {
+  return {
+    id: frontend.id,
+    track_id: frontend.trackId,
+    start_time: frontend.startTime,
+    duration: frontend.duration,
+    type: frontend.type,
+    source: frontend.source,
+    protected: frontend.protected,
+    metadata: frontend.metadata
+      ? {
+          created_at: frontend.metadata.createdAt,
+          note: frontend.metadata.note,
+          replaced_clip_id: frontend.metadata.replacedClipId,
+          user_created: frontend.metadata.userCreated,
+        }
+      : undefined,
+  };
 }

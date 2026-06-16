@@ -1,13 +1,8 @@
 import { create } from "zustand";
-import {
-  TemplateDefinition,
-  TemplateCustomization,
-  TemplateCategory,
-  RenderedFrameSequence,
-} from "./types";
+import { TemplateDefinition, TemplateCustomization, TemplateCategory, RenderedFrameSequence } from "./types";
 import { injectText, injectColor } from "./TemplateInjector";
 import { renderToFrameSequence } from "./FrameRenderer";
-import { ClypraApi } from "@/features/text-effects/api/clypraApi";
+import { TextEffectsApi } from "@/features/text-effects/api/textEffectsApi";
 import { ALL_TEMPLATES } from "./templates/index";
 
 interface TemplateState {
@@ -51,7 +46,7 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
   loadTemplates: async () => {
     set({ isLoading: true });
     try {
-      const apiTemplates = await ClypraApi.getTemplatesIndex();
+      const apiTemplates = await TextEffectsApi.getTemplatesIndex();
       // Initially, the API templates won't have lottieData populated.
       // We will fetch their lottieData on-demand when selected or previewed.
       set({
@@ -85,20 +80,18 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
       try {
         set({ isLoading: true });
         // The clypra-api expects category and template ID to load Lottie JSON
-        const lottieData = await ClypraApi.getLottieTemplate(loadedTemplate.category, loadedTemplate.id);
+        const lottieData = await TextEffectsApi.getLottieTemplate(loadedTemplate.category, loadedTemplate.id);
         loadedTemplate.lottieData = lottieData;
 
         // Cache the fetched Lottie data in the templates list
         set((state) => ({
-          templates: state.templates.map((t) =>
-            t.id === loadedTemplate.id ? { ...t, lottieData } : t
-          ),
+          templates: state.templates.map((t) => (t.id === loadedTemplate.id ? { ...t, lottieData } : t)),
           isLoading: false,
         }));
       } catch (err) {
         console.error(`[Clypra:TemplateStore] Failed to load Lottie data for template ${loadedTemplate.id}:`, err);
         set({ isLoading: false });
-        
+
         // If dynamic loading failed, look up in the static templates fallback as absolute safety net
         const fallback = ALL_TEMPLATES.find((t) => t.id === loadedTemplate.id);
         if (fallback && fallback.lottieData) {
@@ -155,14 +148,14 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
     try {
       // 1. Prepare customizable Lottie JSON
       let data = selected.lottieData || {};
-      
+
       // Ensure Lottie data is dynamically fetched if we bypass standard select
       if (Object.keys(data).length === 0) {
         try {
-          data = await ClypraApi.getLottieTemplate(selected.category, selected.id);
+          data = await TextEffectsApi.getLottieTemplate(selected.category, selected.id);
         } catch (e) {
           // Fallback to static meta
-          const staticFallback = ALL_TEMPLATES.find(t => t.id === selected.id);
+          const staticFallback = ALL_TEMPLATES.find((t) => t.id === selected.id);
           data = staticFallback?.lottieData || {};
         }
       }
@@ -177,16 +170,12 @@ export const useTemplateStore = create<TemplateState>((set, get) => ({
       }
 
       // 2. Perform the frame-by-frame render
-      const sequence = await renderToFrameSequence(
-        data,
-        selected,
-        (progress) => {
-          if (activeToken.cancelled) {
-            throw new Error("Render cancelled by user");
-          }
-          set({ renderProgress: progress });
+      const sequence = await renderToFrameSequence(data, selected, (progress) => {
+        if (activeToken.cancelled) {
+          throw new Error("Render cancelled by user");
         }
-      );
+        set({ renderProgress: progress });
+      });
 
       set({ isRendering: false, renderProgress: 100 });
       return sequence;

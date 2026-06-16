@@ -36,14 +36,7 @@ export class EffectRenderer {
    * Get the renderer function for an effect type
    */
   private static getRenderer(type: EffectRendererType): ((ctx: CanvasRenderingContext2D, params: EffectParameters, intensity: number, time: number) => void) | null {
-    const renderers: Record<EffectRendererType, any> = {
-      // Camera effects
-      shake: this.renderShake,
-      zoom: this.renderZoom,
-      pan: this.renderPan,
-      rotate: this.renderRotate,
-      dolly: this.renderDolly,
-
+    const renderers: Record<string, any> = {
       // Blur effects
       blur: this.renderBlur,
       motion_blur: this.renderMotionBlur,
@@ -79,57 +72,21 @@ export class EffectRenderer {
       freeze_frame: this.renderFreezeFrame,
       echo: this.renderEcho,
       strobe: this.renderStrobe,
+
+      // Body effects are handled in the canonical rasterizer where source
+      // frame pixels are available for mask generation.
+      "body-segmentation-glow": this.renderBodyEffectNoop,
+      body_glow: this.renderBodyEffectNoop,
+      body_outline: this.renderBodyEffectNoop,
+      body_particles: this.renderBodyEffectNoop,
     };
 
     return renderers[type] || null;
   }
 
-  // ============================================================================
-  // CAMERA EFFECTS
-  // ============================================================================
-
-  private static renderShake(ctx: CanvasRenderingContext2D, params: EffectParameters, intensity: number, time: number): void {
-    const shakeIntensity = (params.intensity || 50) * intensity;
-    const frequency = params.frequency || 10;
-
-    const offsetX = Math.sin(time * frequency) * shakeIntensity;
-    const offsetY = Math.cos(time * frequency * 1.3) * shakeIntensity;
-
-    ctx.translate(offsetX, offsetY);
-  }
-
-  private static renderZoom(ctx: CanvasRenderingContext2D, params: EffectParameters, intensity: number, time: number): void {
-    const scale = 1 + (params.scale || 0.2) * intensity;
-    const centerX = params.centerX || 0.5;
-    const centerY = params.centerY || 0.5;
-
-    const width = ctx.canvas.width;
-    const height = ctx.canvas.height;
-
-    ctx.translate(width * centerX, height * centerY);
-    ctx.scale(scale, scale);
-    ctx.translate(-width * centerX, -height * centerY);
-  }
-
-  private static renderPan(ctx: CanvasRenderingContext2D, params: EffectParameters, intensity: number, time: number): void {
-    const panX = (params.panX || 0) * intensity;
-    const panY = (params.panY || 0) * intensity;
-    ctx.translate(panX, panY);
-  }
-
-  private static renderRotate(ctx: CanvasRenderingContext2D, params: EffectParameters, intensity: number, time: number): void {
-    const angle = (params.angle || 0) * intensity * (Math.PI / 180);
-    const width = ctx.canvas.width;
-    const height = ctx.canvas.height;
-
-    ctx.translate(width / 2, height / 2);
-    ctx.rotate(angle);
-    ctx.translate(-width / 2, -height / 2);
-  }
-
-  private static renderDolly(ctx: CanvasRenderingContext2D, params: EffectParameters, intensity: number, time: number): void {
-    // Dolly is essentially zoom + slight rotation
-    this.renderZoom(ctx, params, intensity, time);
+  private static renderBodyEffectNoop(): void {
+    // Body renderers require source-frame pixels and are dispatched from
+    // core/render/rasterizer.ts so preview and export share the same output.
   }
 
   // ============================================================================

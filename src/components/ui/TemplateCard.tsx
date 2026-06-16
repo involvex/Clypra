@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect } from "react";
 import { TemplateDefinition } from "@/features/text-templates/types";
 import { Star, Loader2, Check, Plus } from "lucide-react";
 import { LottiePlayer, LottiePlayerHandle } from "@/features/text-templates/LottiePlayer";
-import { ClypraApi } from "@/features/text-effects/api/clypraApi";
+import { TextEffectsApi } from "@/features/text-effects/api/textEffectsApi";
 
 interface TemplateCardProps {
   template: TemplateDefinition;
@@ -50,8 +50,8 @@ export const TemplateCard: React.FC<TemplateCardProps> = ({
 
       setIsLoadingLottie(true);
 
-      ClypraApi.getLottieTemplate(template.category, template.id)
-        .then((data) => {
+      TextEffectsApi.getLottieTemplate(template.category, template.id)
+        .then((data: any) => {
           // Check if fetch was cancelled (user moused out)
           if (abortController.signal.aborted) {
             return;
@@ -65,7 +65,7 @@ export const TemplateCard: React.FC<TemplateCardProps> = ({
             // Play will be triggered by the next useEffect when lottieData changes
           }
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           if (abortController.signal.aborted) {
             return;
           }

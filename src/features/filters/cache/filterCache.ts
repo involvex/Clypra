@@ -5,7 +5,7 @@
 
 import { BaseDirectory, exists, mkdir, writeFile, readFile, remove, readDir } from "@tauri-apps/plugin-fs";
 import { join, appCacheDir } from "@tauri-apps/api/path";
-import type { FilterAsset } from "@/features/video-effects/types";
+import type { FilterAsset } from "../types";
 
 export interface CachedFilter {
   id: string;

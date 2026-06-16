@@ -1,10 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { Trash2, HardDrive, RefreshCw, AlertCircle, CheckCircle, Cloud, Database, Music2, Film } from "lucide-react";
+import { Trash2, HardDrive, RefreshCw, AlertCircle, CheckCircle, Cloud, Database, Music2 } from "lucide-react";
 import { useCacheManager } from "@/hooks/useCacheManager";
-import { ClypraApi } from "@/features/text-effects/api/clypraApi";
+import { TextEffectsApi } from "@/features/text-effects/api/textEffectsApi";
 import { useAudioLibraryStore } from "@/features/audio-library/store/audioLibraryStore";
-import { useVideoEffectsStore } from "@/features/video-effects/store/videoEffectsStore";
-
 
 export const CacheSettings: React.FC = () => {
   const { isClearing, cacheInfo, lastResult, clearAllCaches, clearAppCache, clearWebViewCache, clearGPUCache } = useCacheManager();
@@ -15,23 +13,11 @@ export const CacheSettings: React.FC = () => {
   const [audioCacheStats, setAudioCacheStats] = useState({ count: 0, totalSize: 0, items: [] as any[] });
   const [isClearingAudio, setIsClearingAudio] = useState(false);
 
-  // Video Effects Cache States
-  const [videoCacheStats, setVideoCacheStats] = useState({ count: 0, totalSize: 0 });
-  const [isClearingVideo, setIsClearingVideo] = useState(false);
-  const getVideoCacheStats = useVideoEffectsStore((s) => s.getCacheStats);
-  const clearVideoCache = useVideoEffectsStore((s) => s.clearOverlayCache);
-
   // Load audio cache stats
   useEffect(() => {
     const stats = getCacheStats();
     setAudioCacheStats(stats);
   }, [getCacheStats]);
-
-  // Load video cache stats
-  useEffect(() => {
-    const stats = getVideoCacheStats();
-    setVideoCacheStats({ count: stats.diskCount, totalSize: stats.diskSize });
-  }, [getVideoCacheStats]);
 
   // Refresh audio cache stats
   const refreshAudioStats = () => {
@@ -39,16 +25,9 @@ export const CacheSettings: React.FC = () => {
     setAudioCacheStats(stats);
   };
 
-  // Refresh video cache stats
-  const refreshVideoStats = () => {
-    const stats = getVideoCacheStats();
-    setVideoCacheStats({ count: stats.diskCount, totalSize: stats.diskSize });
-  };
-
-
   const handleClearLocalApiCache = () => {
     try {
-      ClypraApi.clearLocalCache();
+      TextEffectsApi.clearLocalCache();
       setApiCacheStatus({ type: "success", message: "Local API cache cleared successfully" });
       setTimeout(() => setApiCacheStatus(null), 3000);
     } catch (error) {
@@ -72,28 +51,12 @@ export const CacheSettings: React.FC = () => {
     }
   };
 
-  const handleClearVideoCache = async () => {
-    setIsClearingVideo(true);
-    try {
-      await clearVideoCache();
-      refreshVideoStats();
-      setApiCacheStatus({ type: "success", message: "Video effects cache cleared successfully" });
-      setTimeout(() => setApiCacheStatus(null), 3000);
-    } catch (error) {
-      setApiCacheStatus({ type: "error", message: "Failed to clear video effects cache" });
-      setTimeout(() => setApiCacheStatus(null), 5000);
-    } finally {
-      setIsClearingVideo(false);
-    }
-  };
-
-
   const handleClearServerCache = async () => {
     setIsClearingApi(true);
     setApiCacheStatus(null);
 
     try {
-      const result = await ClypraApi.purgeAllCaches();
+      const result = await TextEffectsApi.purgeAllCaches();
       const { local, server } = result;
 
       const kvDeleted = server.kv?.totalDeleted || 0;
@@ -316,60 +279,6 @@ export const CacheSettings: React.FC = () => {
           <p className="text-[11px] text-orange-200/90">Clearing audio cache will remove all downloaded library files. You'll need to download them again when adding to timeline.</p>
         </div>
       </div>
-
-      {/* Video Effects Cache Management */}
-      <div className="space-y-3 pt-4 border-t border-white/6">
-        <div>
-          <h3 className="text-[13px] font-semibold uppercase tracking-wider text-text-muted mb-2">Video Effects Cache</h3>
-          <p className="text-[11px] text-text-muted">Manage downloaded video overlays and assets.</p>
-        </div>
-
-        {/* Video Cache Stats */}
-        <div className="bg-surface-raised/30 border border-white/6 rounded-lg p-4 space-y-3">
-          <div className="flex items-center gap-2 text-xs">
-            <Film className="w-4 h-4 text-accent" />
-            <span className="font-semibold text-text-primary">Cached Video Overlays</span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 text-[11px]">
-            <div className="bg-surface-raised/50 rounded p-2 border border-white/5">
-              <div className="text-text-muted">Files</div>
-              <div className="text-text-primary font-semibold mt-1">{videoCacheStats.count}</div>
-            </div>
-
-            <div className="bg-surface-raised/50 rounded p-2 border border-white/5">
-              <div className="text-text-muted">Total Size</div>
-              <div className="text-text-primary font-semibold mt-1">{(videoCacheStats.totalSize / (1024 * 1024)).toFixed(2)} MB</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <button onClick={refreshVideoStats} disabled={isClearingVideo} className="flex items-center gap-3 p-4 bg-surface-raised/20 hover:bg-surface-raised/40 border border-white/6 hover:border-accent/30 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
-            <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center">
-              <RefreshCw className="w-5 h-5 text-accent" />
-            </div>
-            <div className="text-left flex-1">
-              <div className="font-medium text-text-primary text-xs">Refresh Stats</div>
-              <div className="text-[10px] text-text-muted">Update cache information</div>
-            </div>
-          </button>
-
-          <button onClick={handleClearVideoCache} disabled={isClearingVideo} className="flex items-center gap-3 p-4 bg-surface-raised/20 hover:bg-surface-raised/40 border border-white/6 hover:border-red-500/30 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
-            <div className="w-10 h-10 rounded-lg bg-red-500/20 flex items-center justify-center">{isClearingVideo ? <RefreshCw className="w-5 h-5 text-red-400 animate-spin" /> : <Trash2 className="w-5 h-5 text-red-400" />}</div>
-            <div className="text-left flex-1">
-              <div className="font-medium text-text-primary text-xs">Clear Video Cache</div>
-              <div className="text-[10px] text-text-muted">Delete all downloaded files</div>
-            </div>
-          </button>
-        </div>
-
-        <div className="flex items-start gap-3 p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg">
-          <AlertCircle className="w-4 h-4 text-orange-400 shrink-0 mt-0.5" />
-          <p className="text-[11px] text-orange-200/90">Clearing video cache will remove all downloaded overlays. You will need to download them again when adding to timeline.</p>
-        </div>
-      </div>
-
 
       {/* Warning Note */}
       <div className="flex items-start gap-3 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">

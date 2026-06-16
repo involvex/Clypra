@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useEffectsStore } from "../store/effectsStore";
 import { EffectCard } from "@/components/ui/EffectCard";
-import { ClypraApi } from "../api/clypraApi";
+import { TextEffectsApi } from "../api/textEffectsApi";
 import type { TextEffectDefinition } from "../types/types";
 import { useFavoritesStore } from "@/store/favoritesStore";
 import { useUIStore } from "@/store/uiStore";
@@ -43,7 +43,7 @@ export function EffectGrid({ searchQuery = "", onAddToTimeline }: EffectGridProp
 
     // Lazy load the full effect definition
     try {
-      const fullEffect = await ClypraApi.getFullEffect(item.category, item.id);
+      const fullEffect = await TextEffectsApi.getFullEffect(item.category, item.id);
 
       setTimeout(() => {
         completeDownload(itemId, "effect");
@@ -86,7 +86,7 @@ export function EffectGrid({ searchQuery = "", onAddToTimeline }: EffectGridProp
 
     try {
       // Resolve the full effect configuration
-      const fullEffect = useEffectsStore.getState().definitions[itemId] || (await ClypraApi.getFullEffect(item.category, itemId));
+      const fullEffect = useEffectsStore.getState().definitions[itemId] || (await TextEffectsApi.getFullEffect(item.category, itemId));
 
       // Mark as downloaded
       completeDownload(itemId, "effect");

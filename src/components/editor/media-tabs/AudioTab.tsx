@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, CheckCircle, Download, Loader2, Music2, Pause, Play, Plus, Search } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/Tooltip";
 import { NetworkError } from "@/components/ui/NetworkError";
-import { AUDIO_LIBRARY_CATEGORIES, ClypraAudioApi, type AudioLibraryCategory, type AudioLibraryItem } from "@/features/audio-library/api/clypraAudioApi";
+import { AUDIO_LIBRARY_CATEGORIES, AudioLibraryApi, type AudioLibraryCategory, type AudioLibraryItem } from "@/features/audio-library/api/audioLibraryApi";
 import { useAudioLibraryStore } from "@/features/audio-library/store/audioLibraryStore";
 import { useUIStore } from "@/store/uiStore";
 import type { TabProps } from "./types";
@@ -22,11 +22,11 @@ export const AudioTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
     setError(null);
     setIsNetworkError(false);
 
-    ClypraAudioApi.getAudioByCategory(activeCategory)
-      .then((nextItems) => {
+    AudioLibraryApi.getAudioByCategory(activeCategory)
+      .then((nextItems: AudioLibraryItem[]) => {
         if (!cancelled) setItems(nextItems);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (!cancelled) {
           const errorMessage = err instanceof Error ? err.message : "Failed to load audio library";
           setError(errorMessage);

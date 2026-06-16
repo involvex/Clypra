@@ -120,7 +120,7 @@ export const SourcePreview: React.FC = () => {
     let active = true;
     setLottieError(null);
 
-    import("@/lib/cache/stickerCache")
+    import("@/features/stickers/cache/stickerCache")
       .then(({ stickerCacheManager }) => {
         return stickerCacheManager.readLottieJson(sourceAsset.path!);
       })
@@ -319,9 +319,9 @@ export const SourcePreview: React.FC = () => {
 
       // Extract styleId for text effects
       // IMPORTANT: The preset is the full TextEffectDefinition that was fetched during preview.
-      // The preview flow (EffectGrid.handlePreview) calls ClypraApi.getFullEffect() which:
+      // The preview flow (EffectGrid.handlePreview) calls TextEffectsApi.getFullEffect() which:
       //   1. Fetches the definition from the API
-      //   2. Caches it in ClypraApi._effectsCache
+      //   2. Caches it in TextEffectsApi._effectsCache
       //   3. Syncs it to effectsStore.definitions[id]
       // This ensures the rasterizer will find the cached definition when rendering the clip.
       const styleId = preset.presetType === "effect" ? preset.id : undefined;

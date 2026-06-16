@@ -11,7 +11,7 @@ import { useUIStore } from "@/store/uiStore";
 import { useTimelineStore, getInsertIndexForNewTrack } from "@/store/timelineStore";
 import { useProjectStore } from "@/store/projectStore";
 import { createTextClip } from "@/lib/text/textClip";
-import { ClypraApi } from "@/features/text-effects/api/clypraApi";
+import { TextEffectsApi } from "@/features/text-effects/api/textEffectsApi";
 import { useTemplateStore } from "@/features/text-templates/templateStore";
 import { useEffectsStore } from "@/features/text-effects/store/effectsStore";
 import { EffectGrid as NewEffectGrid } from "@/features/text-effects/components/EffectGrid";
@@ -79,8 +79,8 @@ export const TextTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
     loadTemplates();
 
     setIsEffectsLoading(true);
-    ClypraApi.checkApiHealth()
-      .then((isOnline) => {
+    TextEffectsApi.checkApiHealth()
+      .then((isOnline: boolean) => {
         setIsEffectsApiConnected(isOnline);
       })
       .catch(() => {
@@ -307,7 +307,7 @@ export const TextTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
           session?.transportAuthority?.setActiveContext("source");
         }
       } else {
-        const fullEffect = await ClypraApi.getFullEffect(item.category, itemId);
+        const fullEffect = await TextEffectsApi.getFullEffect(item.category, itemId);
         completeDownload(itemId, "effect");
 
         // Only project to the preview player if this item is still the active preview target
@@ -363,7 +363,7 @@ export const TextTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
     let fullEffect: any = null;
     if (type === "effect") {
       try {
-        fullEffect = await ClypraApi.getFullEffect(item.category, item.id);
+        fullEffect = await TextEffectsApi.getFullEffect(item.category, item.id);
       } catch (err) {
         console.error("[Clypra:TextTab] Failed to lazy load detailed config on click:", err);
       }

@@ -207,6 +207,9 @@ export async function exportVideo(config: VideoExportConfig): Promise<VideoExpor
     for (let i = 0; i < frameTimes.length; i++) {
       const time = frameTimes[i];
 
+      // Track ALL acquired video elements for this frame (base + overlays)
+      const frameVideoElements: HTMLVideoElement[] = [];
+
       // Pre-load and seek all video elements for this frame
       const videoElements = new Map<string, HTMLVideoElement>();
 
@@ -237,6 +240,7 @@ export async function exportVideo(config: VideoExportConfig): Promise<VideoExpor
         try {
           const video = await videoPool.acquire(resolvedPath, sourceTime);
           videoElements.set(key, video);
+          frameVideoElements.push(video);
         } catch (error) {
           console.warn(`Failed to acquire video for ${key}:`, error);
           // Continue without this video - rasterizer will use fallback
@@ -269,9 +273,9 @@ export async function exportVideo(config: VideoExportConfig): Promise<VideoExpor
         },
       });
 
-      // Release video elements back to pool after frame is written
-      // This allows the pool to reuse elements for subsequent frames
-      for (const video of videoElements.values()) {
+      // ✅ CRITICAL: Release ALL video elements acquired for this frame
+      // This includes both base clips and overlay clips
+      for (const video of frameVideoElements) {
         videoPool.releaseElement(video);
       }
 

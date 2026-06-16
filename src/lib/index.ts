@@ -20,8 +20,8 @@ export * from "./timeline/refitClips";
 
 // Cache
 export * from "./cache/cacheManager";
-export * from "./cache/audioCache";
-export * from "./cache/stickerCache";
+export * from "../features/audio-library/cache/audioCache";
+export * from "../features/stickers/cache/stickerCache";
 export * from "./cache/gpuTextureCache";
 export * from "./cache/globalGPUCache";
 

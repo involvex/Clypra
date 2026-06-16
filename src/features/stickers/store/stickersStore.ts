@@ -4,8 +4,8 @@
  */
 
 import { create } from "zustand";
-import type { StickerItem } from "../api/clypraStickersApi";
-import { stickerCacheManager, type CachedSticker } from "@/lib/cache/stickerCache";
+import type { StickerItem } from "../api/stickersApi";
+import { stickerCacheManager, type CachedSticker } from "@/features/stickers/cache/stickerCache";
 
 export type DownloadStatus = "idle" | "downloading" | "completed" | "error";
 

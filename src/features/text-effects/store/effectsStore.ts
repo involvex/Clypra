@@ -1,7 +1,7 @@
 // src/features/text-effects/store/effectsStore.ts
 import { create } from "zustand";
 import type { EffectIndexItem, EffectFullDefinition } from "../types/types";
-import { ClypraApi } from "../api/clypraApi";
+import { TextEffectsApi } from "../api/textEffectsApi";
 import { builtInPresets } from "@clypra/engine";
 import type { TextEffectConfig } from "@clypra/engine";
 import { getTextEffectCache } from "../cache/persistentCache";
@@ -455,7 +455,7 @@ export const useEffectsStore = create<EffectsState>((set, get) => ({
     // 5. Try global index
     let globalIndexItem = null;
     try {
-      const globalIndex = await ClypraApi.getEffectsIndex();
+      const globalIndex = await TextEffectsApi.getEffectsIndex();
       globalIndexItem = globalIndex.find((x) => x.id === id);
     } catch (e) {
       console.warn("[EffectsStore] Failed to load global effects index:", e);
@@ -470,7 +470,7 @@ export const useEffectsStore = create<EffectsState>((set, get) => ({
     const ALL_CATEGORIES = ["3d", "neon", "metallic", "glitch", "retro", "gradient", "grunge", "outline", "shadow", "elements", "luxury"];
     for (const cat of ALL_CATEGORIES) {
       try {
-        const categoryManifest = await ClypraApi.getEffectsByCategory(cat);
+        const categoryManifest = await TextEffectsApi.getEffectsByCategory(cat);
         const found = categoryManifest.find((x) => x.id === id);
         if (found) {
           set((state) => ({

@@ -27,7 +27,7 @@ const getHeaders = (): HeadersInit => {
   return headers;
 };
 
-export const ClypraApi = {
+export const TextEffectsApi = {
   // In-memory cache map to avoid duplicate network calls when users toggle effects
   _effectsCache: new Map<string, TextEffectDefinition>(),
   _lottieCache: new Map<string, any>(),
@@ -90,7 +90,7 @@ export const ClypraApi = {
         definitions: { ...state.definitions, [id]: data as any },
       }));
     } catch (e) {
-      console.warn("[ClypraApi] Failed to cache effect definition in store:", e);
+      console.warn("[TextEffectsApi] Failed to cache effect definition in store:", e);
     }
 
     return data;

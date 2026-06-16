@@ -123,8 +123,9 @@ export function validateGap(gap: Pick<Gap, "trackId" | "startTime" | "duration">
 
 /**
  * Insert a gap at specified position, shifting clips right
+ * Respects protected gaps - clips won't shift through them
  */
-export function insertGapWithRipple(trackId: string, startTime: number, duration: number, clips: Clip[], source: GapSource = "user-insert"): GapOperationResult {
+export function insertGapWithRipple(trackId: string, startTime: number, duration: number, clips: Clip[], existingGaps: Gap[] = [], source: GapSource = "user-insert"): GapOperationResult {
   // Validate inputs
   if (duration <= 0) {
     return { success: false, error: "Gap duration must be positive" };
@@ -147,8 +148,18 @@ export function insertGapWithRipple(trackId: string, startTime: number, duration
     },
   });
 
-  // Find clips that need to shift
-  const affectedClipIds = clips.filter((c) => c.trackId === trackId && c.startTime >= startTime).map((c) => c.id);
+  // Find protected gaps on this track after the insertion point
+  const protectedGapsAfter = existingGaps.filter((g) => g.trackId === trackId && g.protected && g.startTime >= startTime).sort((a, b) => a.startTime - b.startTime);
+
+  // If there's a protected gap, only shift clips up to that gap
+  let shiftBoundary = Infinity;
+  if (protectedGapsAfter.length > 0) {
+    const firstProtectedGap = protectedGapsAfter[0];
+    shiftBoundary = firstProtectedGap.startTime;
+  }
+
+  // Find clips that need to shift (only those before the protected gap boundary)
+  const affectedClipIds = clips.filter((c) => c.trackId === trackId && c.startTime >= startTime && c.startTime < shiftBoundary).map((c) => c.id);
 
   return {
     success: true,
@@ -159,11 +170,34 @@ export function insertGapWithRipple(trackId: string, startTime: number, duration
 
 /**
  * Remove a gap, shifting clips left (ripple delete)
+ * Respects protected gaps - clips won't shift through them
  */
-export function removeGapWithRipple(gap: Gap, clips: Clip[]): GapOperationResult {
-  // Find clips that need to shift
+export function removeGapWithRipple(gap: Gap, clips: Clip[], existingGaps: Gap[] = []): GapOperationResult {
   const gapEnd = gap.startTime + gap.duration;
-  const affectedClipIds = clips.filter((c) => c.trackId === gap.trackId && c.startTime >= gapEnd).map((c) => c.id);
+
+  // Find protected gaps on this track before the removed gap
+  const protectedGapsBefore = existingGaps.filter((g) => g.trackId === gap.trackId && g.protected && g.id !== gap.id && g.startTime < gap.startTime).sort((a, b) => b.startTime - a.startTime); // Sort descending (closest first)
+
+  // If there's a protected gap before, only shift clips after the removed gap
+  // up until they would collide with the protected gap
+  let shiftBoundary = 0;
+  if (protectedGapsBefore.length > 0) {
+    const lastProtectedGap = protectedGapsBefore[0];
+    const protectedGapEnd = lastProtectedGap.startTime + lastProtectedGap.duration;
+    shiftBoundary = protectedGapEnd;
+  }
+
+  // Find clips that need to shift
+  // Only shift clips that are after the removed gap and won't cross the protected gap boundary
+  const affectedClipIds = clips
+    .filter((c) => {
+      if (c.trackId !== gap.trackId || c.startTime < gapEnd) return false;
+
+      // Check if shifting would cross the protected gap boundary
+      const newStartTime = c.startTime - gap.duration;
+      return newStartTime >= shiftBoundary;
+    })
+    .map((c) => c.id);
 
   return {
     success: true,
@@ -174,8 +208,9 @@ export function removeGapWithRipple(gap: Gap, clips: Clip[]): GapOperationResult
 
 /**
  * Resize a gap (change duration)
+ * Respects protected gaps - clips won't shift through them
  */
-export function resizeGap(gap: Gap, newDuration: number, clips: Clip[]): GapOperationResult {
+export function resizeGap(gap: Gap, newDuration: number, clips: Clip[], existingGaps: Gap[] = []): GapOperationResult {
   if (newDuration <= 0) {
     return { success: false, error: "Gap duration must be positive" };
   }
@@ -183,8 +218,31 @@ export function resizeGap(gap: Gap, newDuration: number, clips: Clip[]): GapOper
   const deltaTime = newDuration - gap.duration;
   const gapEnd = gap.startTime + gap.duration;
 
+  // Find protected gaps after this gap
+  const protectedGapsAfter = existingGaps.filter((g) => g.trackId === gap.trackId && g.protected && g.id !== gap.id && g.startTime >= gapEnd).sort((a, b) => a.startTime - b.startTime);
+
+  // If expanding the gap, check if we'd hit a protected gap
+  let shiftBoundary = Infinity;
+  if (deltaTime > 0 && protectedGapsAfter.length > 0) {
+    const firstProtectedGap = protectedGapsAfter[0];
+    shiftBoundary = firstProtectedGap.startTime;
+  }
+
   // Find clips that need to shift
-  const affectedClipIds = clips.filter((c) => c.trackId === gap.trackId && c.startTime >= gapEnd).map((c) => c.id);
+  // Only shift clips that won't cross the protected gap boundary
+  const affectedClipIds = clips
+    .filter((c) => {
+      if (c.trackId !== gap.trackId || c.startTime < gapEnd) return false;
+
+      // If expanding, don't shift clips beyond protected gap
+      if (deltaTime > 0) {
+        return c.startTime < shiftBoundary;
+      }
+
+      // If shrinking, always safe to shift clips left
+      return true;
+    })
+    .map((c) => c.id);
 
   const resizedGap: Gap = {
     ...gap,

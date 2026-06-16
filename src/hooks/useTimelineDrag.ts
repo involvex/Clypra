@@ -647,7 +647,7 @@ export function useTimelineDrag(containerRef: RefObject<HTMLDivElement | null>) 
 
         case "gap":
         case "append": {
-          // Free positioning - prevent overlaps but preserve gaps
+          // Free positioning - ONLY allow drops in valid gaps, reject overlaps
           const primaryDraggedId = dragSnapshot.draggingClipId ?? dragSnapshot.draggedClipIds[0];
           const primaryOriginalStart = dragSnapshot.originalPlacements[primaryDraggedId]?.startTime ?? 0;
 
@@ -684,50 +684,69 @@ export function useTimelineDrag(containerRef: RefObject<HTMLDivElement | null>) 
             })
             .filter((item): item is NonNullable<typeof item> => item !== null);
 
-          // Check for overlaps and adjust positions (handle cascading)
-          let adjustedPositions = draggedClipsWithPositions.map(({ clip, desiredStartTime }) => {
-            let finalStartTime = desiredStartTime;
-            let hasOverlap = true;
+          // VALIDATE: Check if ALL dragged clips fit without overlapping
+          let isValidDrop = true;
+          const proposedPositions: Array<{ clipId: string; startTime: number }> = [];
 
-            // Keep checking until no overlaps (handle cascading shifts)
-            while (hasOverlap) {
-              hasOverlap = false;
-              for (const existingClip of targetTrackClips) {
-                const existingEnd = existingClip.startTime + existingClip.duration;
-                const newEnd = finalStartTime + clip.duration;
+          for (const { clip, desiredStartTime } of draggedClipsWithPositions) {
+            const finalStartTime = Math.max(0, desiredStartTime);
+            const clipEnd = finalStartTime + clip.duration;
 
-                // Check for overlap
-                if (finalStartTime < existingEnd && newEnd > existingClip.startTime) {
-                  // Overlap detected - move to end of conflicting clip
-                  finalStartTime = existingEnd;
-                  hasOverlap = true; // Re-check with new position
-                  break; // Restart the loop from beginning
-                }
+            // Check for overlap with existing clips
+            for (const existingClip of targetTrackClips) {
+              const existingEnd = existingClip.startTime + existingClip.duration;
+
+              // Check if there's any overlap
+              if (finalStartTime < existingEnd && clipEnd > existingClip.startTime) {
+                // Overlap detected - drop is invalid
+                isValidDrop = false;
+                break;
               }
             }
 
-            return { clipId: clip.id, startTime: Math.max(0, finalStartTime) };
-          });
+            if (!isValidDrop) break;
 
-          // Apply positions
-          withBatch(() => {
-            adjustedPositions.forEach(({ clipId, startTime }) => {
-              updateClip(clipId, {
-                startTime,
-                trackId: dragSnapshot.targetTrackId!,
+            // Also check for overlap with other dragged clips (shouldn't happen, but safety check)
+            for (const other of proposedPositions) {
+              const otherClip = liveClips.find((c) => c.id === other.clipId);
+              if (!otherClip) continue;
+
+              const otherEnd = other.startTime + otherClip.duration;
+              if (finalStartTime < otherEnd && clipEnd > other.startTime) {
+                isValidDrop = false;
+                break;
+              }
+            }
+
+            if (!isValidDrop) break;
+
+            proposedPositions.push({ clipId: clip.id, startTime: finalStartTime });
+          }
+
+          // Only apply the drop if it's valid (no overlaps)
+          if (isValidDrop) {
+            withBatch(() => {
+              proposedPositions.forEach(({ clipId, startTime }) => {
+                updateClip(clipId, {
+                  startTime,
+                  trackId: dragSnapshot.targetTrackId!,
+                });
               });
             });
-          });
 
-          // Detect and sync gaps after free positioning
-          const store = useTimelineStore.getState();
-          if (sourceTrackId !== dragSnapshot.targetTrackId) {
-            // Cross-track: detect gaps on source track
-            store.detectAndSyncGaps(sourceTrackId);
+            // Detect and sync gaps after successful drop
+            const store = useTimelineStore.getState();
+            if (sourceTrackId !== dragSnapshot.targetTrackId) {
+              // Cross-track: detect gaps on source track
+              store.detectAndSyncGaps(sourceTrackId);
+            }
+            // Also sync target track gaps
+            store.detectAndSyncGaps(dragSnapshot.targetTrackId);
+          } else {
+            // Invalid drop - clips would overlap
+            // Do nothing, clips stay in original position
+            console.log("[DRAG] Drop rejected: would cause overlap");
           }
-          // Also sync target track gaps
-          store.detectAndSyncGaps(dragSnapshot.targetTrackId);
-
           break;
         }
       }

@@ -32,7 +32,7 @@ const getHeaders = (): HeadersInit => {
 
 export const STICKER_CATEGORIES: StickerCategory[] = ["trending", "football", "classic", "new", "animal-meme", "hits", "free-fire", "icons", "emoji", "fun", "emphasis", "cover-ups", "wrong", "love", "letters", "mood", "sale", "gaming", "text-sticker", "vlog", "collage", "y2k", "countdown", "music-festival", "journal", "campus", "cartoon", "animal", "fashion", "eco-friendly", "basketball", "birthday", "barbie", "vibes", "shimmer", "glitter", "frame", "travel", "winter", "fall", "neon-text", "details", "techniques", "lip-illustration", "handwriting", "retro-character", "illustration", "alphabet", "pixelated-style", "bubble", "weather", "label", "plog", "cyber", "stylish", "food", "shapes"];
 
-export const ClypraStickersApi = {
+export const StickersApi = {
   async getStickersIndex(): Promise<StickerItem[]> {
     const res = await fetch(`${BASE}/stickers`, {
       cache: "reload",

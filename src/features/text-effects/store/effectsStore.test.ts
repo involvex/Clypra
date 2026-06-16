@@ -1,7 +1,7 @@
 // src/features/text-effects/store/effectsStore.test.ts
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { useEffectsStore } from "./effectsStore";
-import { ClypraApi } from "../api/clypraApi";
+import { TextEffectsApi } from "../api/textEffectsApi";
 
 // Mock the persistent cache
 vi.mock("../cache/persistentCache", () => ({
@@ -261,7 +261,7 @@ describe("useEffectsStore", () => {
     expect(useEffectsStore.getState().index["outline"][0].id).toBe("arctic-monolith");
   });
 
-  test("ClypraApi.getFullEffect - automatically updates useEffectsStore definitions", async () => {
+  test("TextEffectsApi.getFullEffect - automatically updates useEffectsStore definitions", async () => {
     const fetchMock = vi.mocked(fetch);
     const mockDef = {
       id: "arctic-monolith",
@@ -279,7 +279,7 @@ describe("useEffectsStore", () => {
     } as any);
 
     // Call API helper
-    const data = await ClypraApi.getFullEffect("outline", "arctic-monolith");
+    const data = await TextEffectsApi.getFullEffect("outline", "arctic-monolith");
 
     expect(data).toEqual(mockDef);
 

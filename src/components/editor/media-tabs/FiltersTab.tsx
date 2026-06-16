@@ -1,10 +1,11 @@
 import React, { useMemo, useState, useEffect } from "react";
 import { Filter, Grid3X3, Plus, Search, SlidersHorizontal, Sparkles, Sun, Palette, Droplets, Camera, AlertCircle, CheckCircle, Download, Loader2, type LucideIcon } from "lucide-react";
 import type { TabProps } from "./types";
-import { useVideoEffectsStore } from "@/features/video-effects/store/videoEffectsStore";
-import type { FilterAsset } from "@/features/video-effects/types";
 import { useProjectStore } from "@/store/projectStore";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/Tooltip";
+import { FiltersApi } from "@/features/filters/api/filtersApi";
+import { filterCacheManager } from "@/features/filters/cache/filterCache";
+import type { FilterAsset } from "@/features/filters/types";
 
 // Hardcoded filter categories for instant UI rendering
 const FILTER_CATEGORIES = [
@@ -40,47 +41,43 @@ const DEFAULT_ICON = Filter;
 export const FiltersTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<FilterCategory>("vintage");
-
-  const loadCategory = useVideoEffectsStore((state) => state.loadCategory);
-  const categories = useVideoEffectsStore((state) => state.categories);
-  const loading = useVideoEffectsStore((state) => state.categoryLoading);
-  const errors = useVideoEffectsStore((state) => state.categoryErrors);
+  const [filters, setFilters] = useState<FilterAsset[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Initialize cache on mount
   useEffect(() => {
-    useVideoEffectsStore.getState().initializeCache();
+    filterCacheManager.initialize();
   }, []);
 
-  // Fetch filter category items only when the active category changes
+  // Fetch filters when category changes
   useEffect(() => {
-    const categoryKey = `filter:${activeCategory}`;
-    if (!categories[categoryKey]) {
-      loadCategory("filter", activeCategory).catch((err) => {
+    const fetchFilters = async () => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const data = await FiltersApi.getByCategory(activeCategory);
+        setFilters(data);
+      } catch (err) {
         console.error(`[FiltersTab] Failed to load category ${activeCategory}:`, err);
-      });
-    }
-  }, [activeCategory, loadCategory, categories]);
+        setError(err instanceof Error ? err.message : "Failed to load filters");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchFilters();
+  }, [activeCategory]);
 
   // Get filters for the active category only
-  const allFilters = useMemo(() => {
-    return (categories[`filter:${activeCategory}`] || []) as FilterAsset[];
-  }, [activeCategory, categories]);
-
   const filteredFilters = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    return allFilters.filter((filter) => {
+    return filters.filter((filter) => {
       const matchesSearch = !query || filter.name.toLowerCase().includes(query) || filter.description.toLowerCase().includes(query) || filter.category.includes(query);
       return matchesSearch;
     });
-  }, [allFilters, searchQuery]);
-
-  const isCategoryLoading = useMemo(() => {
-    return loading[`filter:${activeCategory}`] || false;
-  }, [activeCategory, loading]);
-
-  const categoryError = useMemo(() => {
-    return errors[`filter:${activeCategory}`] || null;
-  }, [activeCategory, errors]);
+  }, [filters, searchQuery]);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-surface/5 select-none">
@@ -107,17 +104,17 @@ export const FiltersTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
       </div>
 
       <div className="grow overflow-y-auto scrollbar-thin p-1" style={{ scrollbarWidth: "none" }}>
-        {categoryError && (
+        {error && (
           <div className="mb-3 p-3 rounded-lg border border-red-500/20 bg-red-500/5 text-red-200 flex items-start gap-2.5 text-xs">
             <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
             <div>
               <p className="font-semibold">Failed to load filters</p>
-              <p className="opacity-80 mt-0.5">{categoryError}</p>
+              <p className="opacity-80 mt-0.5">{error}</p>
             </div>
           </div>
         )}
 
-        {isCategoryLoading && filteredFilters.length === 0 ? (
+        {loading && filteredFilters.length === 0 ? (
           <div className="grid grid-cols-2 gap-2">
             <SkeletonCard />
             <SkeletonCard />
@@ -135,7 +132,6 @@ export const FiltersTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
             {filteredFilters.map((filter) => (
               <FilterCard key={filter.id} filter={filter} onAddToTimeline={() => onAddToTimeline?.(filter as any, "filters")} />
             ))}
-            {isCategoryLoading && <SkeletonCard />}
           </div>
         )}
       </div>
@@ -165,12 +161,16 @@ const SkeletonCard = () => (
 const FilterCard: React.FC<{ filter: FilterAsset; onAddToTimeline: () => void }> = ({ filter, onAddToTimeline }) => {
   const Icon = FILTER_ICONS[filter.id] || DEFAULT_ICON;
   const isReady = true; // All filters are ready (status field is just for UI labeling)
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [isDownloaded, setIsDownloaded] = useState(false);
 
-  const { getFilterDownloadState, startFilterDownload, isFilterDownloaded } = useVideoEffectsStore();
-
-  const downloadState = getFilterDownloadState(filter.id);
-  const isDownloadedFlag = isFilterDownloaded(filter.id);
-  const isDownloading = downloadState?.status === "downloading";
+  // Check if filter is cached on mount
+  useEffect(() => {
+    filterCacheManager.initialize().then(() => {
+      const cached = filterCacheManager.isCached(filter.id);
+      setIsDownloaded(cached);
+    });
+  }, [filter.id]);
 
   // Use filter-specific preview, or fallback to sample image for testing
   const previewSrc = filter.thumbnail || "/filter-previews/sample.jpg";
@@ -206,7 +206,8 @@ const FilterCard: React.FC<{ filter: FilterAsset; onAddToTimeline: () => void }>
 
     try {
       // Download filter if not cached
-      await startFilterDownload(filter);
+      await filterCacheManager.ensureDownloaded(filter);
+      setIsDownloaded(true);
 
       // TODO: Open filter preview modal
       // For now, just show a toast
@@ -224,13 +225,15 @@ const FilterCard: React.FC<{ filter: FilterAsset; onAddToTimeline: () => void }>
 
     try {
       console.log(`[FilterCard] Adding filter "${filter.name}" to timeline`);
+      setIsDownloading(true);
 
       // Download filter JSON with minimum delay for visual feedback
-      const downloadPromise = startFilterDownload(filter);
+      const downloadPromise = filterCacheManager.ensureDownloaded(filter);
       const delayPromise = new Promise((resolve) => setTimeout(resolve, 300));
 
       await Promise.all([downloadPromise, delayPromise]);
       console.log(`[FilterCard] Filter "${filter.name}" downloaded successfully`);
+      setIsDownloaded(true);
 
       // Add to timeline
       onAddToTimeline();
@@ -241,6 +244,8 @@ const FilterCard: React.FC<{ filter: FilterAsset; onAddToTimeline: () => void }>
     } catch (error) {
       console.error("[FilterCard] Add to timeline failed:", error);
       useProjectStore.getState().showToast("Failed to add filter", "error");
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -251,7 +256,7 @@ const FilterCard: React.FC<{ filter: FilterAsset; onAddToTimeline: () => void }>
         <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] flex items-center justify-center z-20 pointer-events-none">
           <div className="flex flex-col items-center gap-2">
             <Loader2 className="w-6 h-6 text-accent animate-spin" />
-            <span className="text-[10px] font-semibold text-accent">{downloadState?.progress || 0}%</span>
+            <span className="text-[10px] font-semibold text-accent">Loading...</span>
           </div>
         </div>
       )}
@@ -259,7 +264,7 @@ const FilterCard: React.FC<{ filter: FilterAsset; onAddToTimeline: () => void }>
       {/* Preview Area */}
       <div className="h-28 w-full relative overflow-hidden bg-surface/60 shrink-0">
         {/* Cached Indicator */}
-        {isDownloadedFlag && !isDownloading && (
+        {isDownloaded && !isDownloading && (
           <div className="absolute top-2 right-2 z-10">
             <div className="bg-green-500/90 rounded-full p-0.5 shadow-md">
               <CheckCircle className="w-3 h-3 text-white" />
@@ -302,12 +307,12 @@ const FilterCard: React.FC<{ filter: FilterAsset; onAddToTimeline: () => void }>
             <div className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button onClick={handleAddToTimeline} disabled={isDownloading || !isReady} className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${isDownloading ? "bg-accent/20 border border-accent cursor-wait" : isDownloadedFlag ? "bg-accent/20 hover:bg-accent border border-accent text-accent hover:text-white cursor-pointer" : "bg-surface/40 hover:bg-accent/80 border border-border/50 text-text-muted hover:text-white cursor-pointer"}`}>
+                  <button onClick={handleAddToTimeline} disabled={isDownloading || !isReady} className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${isDownloading ? "bg-accent/20 border border-accent cursor-wait" : isDownloaded ? "bg-accent/20 hover:bg-accent border border-accent text-accent hover:text-white cursor-pointer" : "bg-surface/40 hover:bg-accent/80 border border-border/50 text-text-muted hover:text-white cursor-pointer"}`}>
                     {isDownloading ? <Download className="w-3.5 h-3.5 animate-pulse" /> : <Plus className="w-3.5 h-3.5" />}
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="top">
-                  <p>{isDownloadedFlag ? "Add to Timeline" : "Download & Add"}</p>
+                  <p>{isDownloaded ? "Add to Timeline" : "Download & Add"}</p>
                 </TooltipContent>
               </Tooltip>
             </div>

@@ -198,10 +198,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         tracks: payload?.tracks ?? [],
         clips: payload?.clips ?? [],
         transitions: payload?.transitions ?? [],
+        gaps: (payload as any)?.gaps ?? [], // Load gaps from project
       });
     } catch (err) {
       // On error, reset timeline to empty state
-      import("./timelineStore").then(({ useTimelineStore }) => useTimelineStore.getState().hydrateFromProject({ tracks: [], clips: [], transitions: [] })).catch((resetErr) => console.error("[LoadProject] Failed to reset timeline:", resetErr));
+      import("./timelineStore").then(({ useTimelineStore }) => useTimelineStore.getState().hydrateFromProject({ tracks: [], clips: [], transitions: [], gaps: [] })).catch((resetErr) => console.error("[LoadProject] Failed to reset timeline:", resetErr));
     }
 
     // Initialize runtime LAST — stores are now fully populated
@@ -309,10 +310,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       if (project) {
         try {
           const { useTimelineStore } = await import("./timelineStore");
-          const { tracks, clips, transitions } = useTimelineStore.getState();
+          const { tracks, clips, transitions, gaps } = useTimelineStore.getState();
 
           // Convert camelCase to snake_case using centralized serialization
-          const rustProject = toRustProject(project, { tracks, clips, transitions, mediaAssets });
+          const rustProject = toRustProject(project, { tracks, clips, transitions, gaps, mediaAssets });
 
           const { invoke } = await import("@tauri-apps/api/core");
           await invoke("save_project", {
@@ -363,10 +364,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       try {
         // Import timeline store to get tracks and clips
         const { useTimelineStore } = await import("./timelineStore");
-        const { tracks, clips, transitions } = useTimelineStore.getState();
+        const { tracks, clips, transitions, gaps } = useTimelineStore.getState();
 
         // Convert camelCase to snake_case using centralized serialization
-        const rustProject = toRustProject(project, { tracks, clips, transitions, mediaAssets });
+        const rustProject = toRustProject(project, { tracks, clips, transitions, gaps, mediaAssets });
 
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("save_project", {

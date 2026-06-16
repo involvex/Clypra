@@ -4,8 +4,8 @@
  */
 
 import { create } from "zustand";
-import type { AudioLibraryItem } from "../api/clypraAudioApi";
-import { audioCacheManager, type CachedAudioFile, type DownloadProgress } from "@/lib/cache/audioCache";
+import type { AudioLibraryItem } from "../api/audioLibraryApi";
+import { audioCacheManager, type CachedAudioFile, type DownloadProgress } from "@/features/audio-library/cache/audioCache";
 
 export type DownloadStatus = "idle" | "downloading" | "completed" | "error";
 

@@ -5,12 +5,12 @@
 
 import { BaseDirectory, exists, mkdir, writeFile, readFile, remove } from "@tauri-apps/plugin-fs";
 import { join, appCacheDir } from "@tauri-apps/api/path";
-import type { StickerItem } from "@/features/stickers/api/clypraStickersApi";
+import type { StickerItem } from "@/features/stickers/api/stickersApi";
 
 export interface CachedSticker {
   id: string;
   format: "static" | "gif" | "lottie";
-  localImagePath?: string;     // Local path for static imageUrl
+  localImagePath?: string; // Local path for static imageUrl
   localAnimationPath?: string; // Local path for animatedUrl (GIF) or lottieUrl (JSON)
   downloadedAt: number;
 }

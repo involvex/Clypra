@@ -1,27 +1,4 @@
-export type AudioLibraryCategory =
-  | "music"
-  | "lo-fi"
-  | "chill"
-  | "cinematic"
-  | "epic"
-  | "upbeat"
-  | "corporate"
-  | "hip-hop"
-  | "trap"
-  | "electronic"
-  | "synth"
-  | "acoustic"
-  | "indie"
-  | "jazz"
-  | "soul"
-  | "ambient"
-  | "background"
-  | "sfx"
-  | "transition"
-  | "impact"
-  | "ui"
-  | "notifications"
-  | "voice";
+export type AudioLibraryCategory = "music" | "lo-fi" | "chill" | "cinematic" | "epic" | "upbeat" | "corporate" | "hip-hop" | "trap" | "electronic" | "synth" | "acoustic" | "indie" | "jazz" | "soul" | "ambient" | "background" | "sfx" | "transition" | "impact" | "ui" | "notifications" | "voice";
 
 export interface AudioLibraryItem {
   id: string;
@@ -66,7 +43,7 @@ const getHeaders = (): HeadersInit => {
 
 export const AUDIO_LIBRARY_CATEGORIES: AudioLibraryCategory[] = ["music", "lo-fi", "chill", "cinematic", "epic", "upbeat", "corporate", "hip-hop", "trap", "electronic", "synth", "acoustic", "indie", "jazz", "soul", "ambient", "background", "sfx", "transition", "impact", "ui", "notifications", "voice"];
 
-export const ClypraAudioApi = {
+export const AudioLibraryApi = {
   async getAudioIndex(): Promise<AudioLibraryItem[]> {
     const res = await fetch(`${BASE}/audio`, {
       cache: "reload",

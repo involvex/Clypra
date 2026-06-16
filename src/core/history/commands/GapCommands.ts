@@ -9,7 +9,7 @@ import type { Command } from "../Command";
 import { generateCommandId } from "../Command";
 import type { Gap } from "@/types/gap";
 import type { Clip } from "@/types";
-import { insertGapWithRipple, createGap } from "@/lib/timeline/gapEngine";
+import { insertGapWithRipple, createGap, removeGapWithRipple, resizeGap } from "@/lib/timeline/gapEngine";
 
 interface TimelineState {
   clips: Clip[];
@@ -42,36 +42,38 @@ export class InsertGapCommand implements Command {
   }
 
   apply(state: TimelineState): TimelineState {
-    // Create gap
-    const gap = createGap({
-      trackId: this.trackId,
-      startTime: this.startTime,
-      duration: this.duration,
-      type: "manual" as const,
-      source: "user-insert" as const,
-      metadata: {
-        createdAt: Date.now(),
-        userCreated: true,
-      },
-    });
+    // Use insertGapWithRipple with protected gap logic
+    const result = insertGapWithRipple(
+      this.trackId,
+      this.startTime,
+      this.duration,
+      state.clips,
+      state.gaps, // Pass existing gaps to respect protected ones
+      "user-insert",
+    );
 
-    this.insertedGap = gap;
+    if (!result.success || !result.gap) {
+      console.error("[InsertGapCommand] Failed to insert gap:", result.error);
+      return state;
+    }
 
-    // Find clips that need to shift
-    const affectedClips = state.clips.filter((c) => c.trackId === this.trackId && c.startTime >= this.startTime);
+    this.insertedGap = result.gap;
 
     // Store original positions for undo
-    this.shiftedClips = affectedClips.map((c) => ({
-      id: c.id,
-      originalStartTime: c.startTime,
-    }));
+    this.shiftedClips = result.affectedClipIds!.map((clipId) => {
+      const clip = state.clips.find((c) => c.id === clipId);
+      return {
+        id: clipId,
+        originalStartTime: clip!.startTime,
+      };
+    });
 
-    // Apply the gap insertion and shift clips
+    // Apply the gap insertion and shift affected clips only
     return {
       ...state,
-      gaps: [...state.gaps, gap],
+      gaps: [...state.gaps, result.gap],
       clips: state.clips.map((c) => {
-        if (c.trackId === this.trackId && c.startTime >= this.startTime) {
+        if (result.affectedClipIds!.includes(c.id)) {
           return {
             ...c,
             startTime: c.startTime + this.duration,
@@ -135,23 +137,30 @@ export class RemoveGapCommand implements Command {
     if (!gap) return state;
 
     this.removedGap = gap;
-    const gapEnd = gap.startTime + gap.duration;
 
-    // Find clips that need to shift
-    const affectedClips = state.clips.filter((c) => c.trackId === gap.trackId && c.startTime >= gapEnd);
+    // Use removeGapWithRipple with protected gap logic
+    const result = removeGapWithRipple(gap, state.clips, state.gaps);
+
+    if (!result.success) {
+      console.error("[RemoveGapCommand] Failed to remove gap:", result.error);
+      return state;
+    }
 
     // Store original positions for undo
-    this.shiftedClips = affectedClips.map((c) => ({
-      id: c.id,
-      originalStartTime: c.startTime,
-    }));
+    this.shiftedClips = result.affectedClipIds!.map((clipId) => {
+      const clip = state.clips.find((c) => c.id === clipId);
+      return {
+        id: clipId,
+        originalStartTime: clip!.startTime,
+      };
+    });
 
-    // Remove gap and shift clips left
+    // Remove gap and shift affected clips only
     return {
       ...state,
       gaps: state.gaps.filter((g) => g.id !== this.gapId),
       clips: state.clips.map((c) => {
-        if (c.trackId === gap.trackId && c.startTime >= gapEnd) {
+        if (result.affectedClipIds!.includes(c.id)) {
           return {
             ...c,
             startTime: c.startTime - gap.duration,
@@ -276,23 +285,30 @@ export class ResizeGapCommand implements Command {
 
     this.originalDuration = gap.duration;
     const deltaTime = this.newDuration - gap.duration;
-    const gapEnd = gap.startTime + gap.duration;
 
-    // Find clips that need to shift
-    const affectedClips = state.clips.filter((c) => c.trackId === gap.trackId && c.startTime >= gapEnd);
+    // Use resizeGap with protected gap logic
+    const result = resizeGap(gap, this.newDuration, state.clips, state.gaps);
+
+    if (!result.success || !result.gap) {
+      console.error("[ResizeGapCommand] Failed to resize gap:", result.error);
+      return state;
+    }
 
     // Store original positions for undo
-    this.shiftedClips = affectedClips.map((c) => ({
-      id: c.id,
-      originalStartTime: c.startTime,
-    }));
+    this.shiftedClips = result.affectedClipIds!.map((clipId) => {
+      const clip = state.clips.find((c) => c.id === clipId);
+      return {
+        id: clipId,
+        originalStartTime: clip!.startTime,
+      };
+    });
 
-    // Resize gap and shift clips
+    // Resize gap and shift affected clips only
     return {
       ...state,
-      gaps: state.gaps.map((g) => (g.id === this.gapId ? { ...g, duration: this.newDuration } : g)),
+      gaps: state.gaps.map((g) => (g.id === this.gapId ? result.gap! : g)),
       clips: state.clips.map((c) => {
-        if (c.trackId === gap.trackId && c.startTime >= gapEnd) {
+        if (result.affectedClipIds!.includes(c.id)) {
           return {
             ...c,
             startTime: c.startTime + deltaTime,
@@ -330,15 +346,163 @@ export class ResizeGapCommand implements Command {
 }
 
 /**
+ * Pack Track Command
+ *
+ * Removes all unprotected gaps and packs clips tightly in one atomic operation.
+ * This avoids the double-shift bug that occurs when using multiple RemoveGapCommands.
+ */
+export class PackTrackCommand implements Command {
+  readonly id: string;
+  readonly label: string;
+  readonly timestamp: number;
+  readonly undoable: boolean = true;
+
+  private removedGaps: Gap[] = [];
+  private clipPositions: Array<{ id: string; originalStartTime: number; newStartTime: number }> = [];
+
+  constructor(private readonly trackId: string) {
+    this.id = generateCommandId();
+    this.label = "Pack Track";
+    this.timestamp = Date.now();
+  }
+
+  apply(state: TimelineState): TimelineState {
+    const trackClips = state.clips.filter((c) => c.trackId === this.trackId).sort((a, b) => a.startTime - b.startTime);
+
+    const trackGaps = state.gaps.filter((g) => g.trackId === this.trackId);
+
+    // Store removed gaps for undo
+    this.removedGaps = trackGaps.filter((g) => !g.protected);
+    const remainingGaps = trackGaps.filter((g) => g.protected);
+
+    // Calculate new clip positions by packing them tightly
+    let currentTime = 0;
+    this.clipPositions = [];
+
+    for (const clip of trackClips) {
+      this.clipPositions.push({
+        id: clip.id,
+        originalStartTime: clip.startTime,
+        newStartTime: currentTime,
+      });
+      currentTime += clip.duration;
+    }
+
+    // Apply new positions
+    const updatedClips = state.clips.map((c) => {
+      const newPosition = this.clipPositions.find((p) => p.id === c.id);
+      if (newPosition) {
+        return { ...c, startTime: newPosition.newStartTime };
+      }
+      return c;
+    });
+
+    // Keep only protected gaps, remove unprotected ones
+    const updatedGaps = state.gaps.filter((g) => g.trackId !== this.trackId || g.protected);
+
+    return {
+      ...state,
+      clips: updatedClips,
+      gaps: updatedGaps,
+      epoch: state.epoch + 1,
+    };
+  }
+
+  invert(): Command {
+    return new UnpackTrackCommand(this.trackId, this.removedGaps, this.clipPositions);
+  }
+
+  toJSON(): Record<string, any> {
+    return {
+      type: "PackTrack",
+      trackId: this.trackId,
+      removedGaps: this.removedGaps,
+      clipPositions: this.clipPositions,
+    };
+  }
+
+  static fromJSON(data: Record<string, any>): PackTrackCommand {
+    const cmd = new PackTrackCommand(data.trackId);
+    cmd.removedGaps = data.removedGaps || [];
+    cmd.clipPositions = data.clipPositions || [];
+    return cmd;
+  }
+}
+
+/**
+ * Unpack Track Command (inverse of pack)
+ *
+ * Restores removed gaps and original clip positions.
+ */
+class UnpackTrackCommand implements Command {
+  readonly id: string;
+  readonly label: string;
+  readonly timestamp: number;
+  readonly undoable: boolean = true;
+
+  constructor(
+    private readonly trackId: string,
+    private readonly gapsToRestore: Gap[],
+    private readonly originalPositions: Array<{ id: string; originalStartTime: number; newStartTime: number }>,
+  ) {
+    this.id = generateCommandId();
+    this.label = "Unpack Track";
+    this.timestamp = Date.now();
+  }
+
+  apply(state: TimelineState): TimelineState {
+    // Restore gaps
+    const restoredGaps = [...state.gaps, ...this.gapsToRestore];
+
+    // Restore original clip positions
+    const restoredClips = state.clips.map((c) => {
+      const originalPosition = this.originalPositions.find((p) => p.id === c.id);
+      if (originalPosition) {
+        return { ...c, startTime: originalPosition.originalStartTime };
+      }
+      return c;
+    });
+
+    return {
+      ...state,
+      clips: restoredClips,
+      gaps: restoredGaps,
+      epoch: state.epoch + 1,
+    };
+  }
+
+  invert(): Command {
+    return new PackTrackCommand(this.trackId);
+  }
+
+  toJSON(): Record<string, any> {
+    return {
+      type: "UnpackTrack",
+      trackId: this.trackId,
+      gapsToRestore: this.gapsToRestore,
+      originalPositions: this.originalPositions,
+    };
+  }
+
+  static fromJSON(data: Record<string, any>): UnpackTrackCommand {
+    return new UnpackTrackCommand(data.trackId, data.gapsToRestore, data.originalPositions);
+  }
+}
+
+/**
  * Toggle Gap Protection Command
  *
  * Marks a gap as protected (won't be removed during pack track)
+ * Uses position-based lookup to handle undo/redo cycles where gap IDs change
  */
 export class ToggleGapProtectionCommand implements Command {
   readonly id: string;
   readonly label: string;
   readonly timestamp: number;
   readonly undoable: boolean = true;
+
+  // Store position instead of ID for undo/redo stability
+  private gapPosition?: { trackId: string; startTime: number; duration: number };
 
   constructor(private readonly gapId: string) {
     this.id = generateCommandId();
@@ -347,10 +511,30 @@ export class ToggleGapProtectionCommand implements Command {
   }
 
   apply(state: TimelineState): TimelineState {
+    // Find gap by ID or position
+    let gap = state.gaps.find((g) => g.id === this.gapId);
+
+    // If not found by ID, try finding by position (for undo/redo)
+    if (!gap && this.gapPosition) {
+      gap = state.gaps.find((g) => g.trackId === this.gapPosition!.trackId && Math.abs(g.startTime - this.gapPosition!.startTime) < 0.001 && Math.abs(g.duration - this.gapPosition!.duration) < 0.001);
+    }
+
+    if (!gap) {
+      console.warn(`[ToggleGapProtectionCommand] Gap not found: ${this.gapId}`);
+      return state;
+    }
+
+    // Store position for future lookups
+    this.gapPosition = {
+      trackId: gap.trackId,
+      startTime: gap.startTime,
+      duration: gap.duration,
+    };
+
     return {
       ...state,
       gaps: state.gaps.map((g) =>
-        g.id === this.gapId
+        g.id === gap!.id
           ? {
               ...g,
               protected: !g.protected,
@@ -363,18 +547,23 @@ export class ToggleGapProtectionCommand implements Command {
   }
 
   invert(): Command {
-    // Toggle is its own inverse
-    return new ToggleGapProtectionCommand(this.gapId);
+    // Toggle is its own inverse, but pass the position info
+    const invertCmd = new ToggleGapProtectionCommand(this.gapId);
+    invertCmd.gapPosition = this.gapPosition;
+    return invertCmd;
   }
 
   toJSON(): Record<string, any> {
     return {
       type: "ToggleGapProtection",
       gapId: this.gapId,
+      gapPosition: this.gapPosition,
     };
   }
 
   static fromJSON(data: Record<string, any>): ToggleGapProtectionCommand {
-    return new ToggleGapProtectionCommand(data.gapId);
+    const cmd = new ToggleGapProtectionCommand(data.gapId);
+    cmd.gapPosition = data.gapPosition;
+    return cmd;
   }
 }

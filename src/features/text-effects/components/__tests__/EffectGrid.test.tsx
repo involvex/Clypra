@@ -4,7 +4,7 @@ import { EffectGrid } from "../EffectGrid";
 import { useEffectsStore } from "../../store/effectsStore";
 import { useFavoritesStore } from "@/store/favoritesStore";
 import { useUIStore } from "@/store/uiStore";
-import { ClypraApi } from "../../api/clypraApi";
+import { TextEffectsApi } from "../../api/textEffectsApi";
 import type { TextEffectDefinition } from "../../types/types";
 
 // Mock ClypraApi
@@ -72,11 +72,11 @@ describe("EffectGrid Component", () => {
 
   it("renders category tabs and maps default category correctly", () => {
     render(<EffectGrid />);
-    
+
     // Check if category button exists
     expect(screen.getByText("3d")).toBeInTheDocument();
     expect(screen.getByText("neon")).toBeInTheDocument();
-    
+
     // Classic 3D belongs to '3d' category which is active by default
     expect(screen.getByText("Classic 3D")).toBeInTheDocument();
   });
@@ -139,7 +139,7 @@ describe("EffectGrid Component", () => {
       strokes: [],
       shadows: [],
     };
-    vi.mocked(ClypraApi.getFullEffect).mockResolvedValue(fullEffectMock);
+    vi.mocked(TextEffectsApi.getFullEffect).mockResolvedValue(fullEffectMock);
 
     const startDownloadSpy = vi.spyOn(useFavoritesStore.getState(), "startDownload");
     const completeDownloadSpy = vi.spyOn(useFavoritesStore.getState(), "completeDownload");
@@ -155,7 +155,7 @@ describe("EffectGrid Component", () => {
     fireEvent.click(applyBtn);
 
     expect(startDownloadSpy).toHaveBeenCalledWith("classic-3d");
-    expect(ClypraApi.getFullEffect).toHaveBeenCalledWith("3d", "classic-3d");
+    expect(TextEffectsApi.getFullEffect).toHaveBeenCalledWith("3d", "classic-3d");
 
     // Flush promise microtasks to schedule setTimeout
     await Promise.resolve();
@@ -182,7 +182,7 @@ describe("EffectGrid Component", () => {
       strokes: [],
       shadows: [],
     };
-    vi.mocked(ClypraApi.getFullEffect).mockResolvedValue(fullEffectMock);
+    vi.mocked(TextEffectsApi.getFullEffect).mockResolvedValue(fullEffectMock);
     vi.spyOn(useEffectsStore.getState(), "selectEffect").mockResolvedValue(undefined as any);
 
     const startDownloadSpy = vi.spyOn(useFavoritesStore.getState(), "startDownload");
@@ -213,8 +213,12 @@ describe("EffectGrid Component", () => {
     let resolveA: (value: TextEffectDefinition) => void = () => {};
     let resolveB: (value: TextEffectDefinition) => void = () => {};
 
-    const promiseA = new Promise<TextEffectDefinition>((resolve) => { resolveA = resolve; });
-    const promiseB = new Promise<TextEffectDefinition>((resolve) => { resolveB = resolve; });
+    const promiseA = new Promise<TextEffectDefinition>((resolve) => {
+      resolveA = resolve;
+    });
+    const promiseB = new Promise<TextEffectDefinition>((resolve) => {
+      resolveB = resolve;
+    });
 
     const classic3dMock: TextEffectDefinition = {
       id: "classic-3d",
@@ -240,7 +244,7 @@ describe("EffectGrid Component", () => {
       shadows: [],
     };
 
-    vi.mocked(ClypraApi.getFullEffect).mockImplementation((category, id) => {
+    vi.mocked(TextEffectsApi.getFullEffect).mockImplementation((category, id) => {
       if (id === "classic-3d") return promiseA;
       if (id === "neon-glow") return promiseB;
       return Promise.reject(new Error("Unknown ID"));

@@ -5,7 +5,7 @@
 
 import { BaseDirectory, exists, mkdir, writeFile, readFile, remove, readDir } from "@tauri-apps/plugin-fs";
 import { join, appCacheDir } from "@tauri-apps/api/path";
-import type { AudioLibraryItem } from "@/features/audio-library/api/clypraAudioApi";
+import type { AudioLibraryItem } from "@/features/audio-library/api/audioLibraryApi";
 
 export interface CachedAudioFile {
   id: string;

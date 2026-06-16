@@ -16,7 +16,7 @@
 
 import { useTimelineStore } from "@/store/timelineStore";
 import { useHistoryStore } from "@/store/historyStore";
-import { InsertGapCommand, RemoveGapCommand, ResizeGapCommand, ToggleGapProtectionCommand } from "@/core/history/commands/GapCommands";
+import { InsertGapCommand, RemoveGapCommand, ResizeGapCommand, ToggleGapProtectionCommand, PackTrackCommand } from "@/core/history/commands/GapCommands";
 import { validateGap } from "./gapEngine";
 import type { Gap } from "@/types/gap";
 
@@ -140,14 +140,14 @@ class GapManagerImpl {
   /**
    * Pack track - remove all unprotected gaps
    *
-   * Implemented as batch transaction of RemoveGapCommands
-   * to support undo (single "Pack Track" undo restores all gaps)
+   * Uses PackTrackCommand to do this atomically in a single operation,
+   * avoiding the double-shift bug from multiple RemoveGapCommands.
    *
    * @param trackId - Track ID to pack
    */
   packTrack(trackId: string): void {
     const { gaps, tracks } = useTimelineStore.getState();
-    const { beginTransaction, commitTransaction, execute } = useHistoryStore.getState();
+    const { execute } = useHistoryStore.getState();
 
     // Check if track exists and is not locked
     const track = tracks.find((t) => t.id === trackId);
@@ -170,19 +170,8 @@ class GapManagerImpl {
       return;
     }
 
-    // Execute as single undoable transaction
-    beginTransaction(`Pack Track (${trackGaps.length} gaps)`);
-
-    try {
-      for (const gap of trackGaps) {
-        execute(new RemoveGapCommand(gap.id));
-      }
-      commitTransaction();
-    } catch (error) {
-      console.error("[GapManager] Pack track failed:", error);
-      // Transaction will auto-rollback on error
-      throw error;
-    }
+    // Execute as single atomic command (no transaction needed)
+    execute(new PackTrackCommand(trackId));
   }
 
   /**

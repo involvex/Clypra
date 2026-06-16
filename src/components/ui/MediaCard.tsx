@@ -7,7 +7,7 @@ import { Film, Plus } from "lucide-react";
 
 import { useUIStore } from "@/store/uiStore";
 import { formatTime } from "@/lib/utils/timeFormatting";
-import { MediaCardWaveform } from "../editor/media-tabs/MediaCardWaveform";
+import { MediaCardWaveform } from "./MediaCardWaveform";
 
 // MediaCard Component
 interface MediaCardProps {

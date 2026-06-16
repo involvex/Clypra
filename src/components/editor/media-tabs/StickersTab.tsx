@@ -6,7 +6,7 @@ import { useStickersStore } from "@/features/stickers/store/stickersStore";
 import { useUIStore } from "@/store/uiStore";
 import type { MediaAsset } from "@/types";
 import type { TabProps } from "./types";
-import { STICKER_CATEGORIES, ClypraStickersApi, type StickerCategory, type StickerItem } from "@/features/stickers/api/clypraStickersApi";
+import { STICKER_CATEGORIES, StickersApi, type StickerCategory, type StickerItem } from "@/features/stickers/api/stickersApi";
 
 export const StickersTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
   const [searchQuery, setSearchQuery] = useState("");
@@ -28,11 +28,11 @@ export const StickersTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
     setError(null);
     setIsNetworkError(false);
 
-    ClypraStickersApi.getStickersByCategory(activeCategory)
-      .then((nextStickers) => {
+    StickersApi.getStickersByCategory(activeCategory)
+      .then((nextStickers: StickerItem[]) => {
         if (!cancelled) setStickers(nextStickers);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (!cancelled) {
           const errorMessage = err instanceof Error ? err.message : "Failed to load stickers";
           setError(errorMessage);

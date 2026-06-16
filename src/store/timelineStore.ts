@@ -25,7 +25,7 @@ import { create } from "zustand";
 import type { Track, TrackType, Clip, TextClip, TransitionTimelineItem, TransitionType } from "@/types";
 import type { Gap } from "@/types/gap";
 import { generateId, getCounter } from "@/lib/utils/id";
-import { detectGaps, createGap, insertGapWithRipple, removeGapWithRipple, resizeGap, packTrack } from "@/lib/timeline/gapEngine";
+import { detectGaps, createGap, insertGapWithRipple, removeGapWithRipple, resizeGap, packTrack, mergeAdjacentGaps, validateGap } from "@/lib/timeline/gapEngine";
 import { recalculateTextClipBounds } from "@/lib/text/textClip";
 import { useUIStore } from "./uiStore";
 import { useProjectStore } from "./projectStore";
@@ -69,7 +69,7 @@ interface TimelineStore {
   /** Increment epoch (for cache invalidation) */
   incrementEpoch: () => void;
   /** Hydrate timeline state from project load (atomic operation) */
-  hydrateFromProject: (payload: { tracks?: any[]; clips?: any[]; transitions?: TransitionTimelineItem[] }) => void;
+  hydrateFromProject: (payload: { tracks?: any[]; clips?: any[]; transitions?: TransitionTimelineItem[]; gaps?: Gap[] }) => void;
   addTrack: (type: TrackType) => void;
   /** Inserts a track at index (clamped); returns the new track id. */
   insertTrackAt: (type: TrackType, index: number) => string;
@@ -115,12 +115,15 @@ const trackHeights: Record<string, number> = {
   text: 30,
   sticker: 30,
   filter: 30,
+  "video-effect": 30,
+  "body-effect": 30,
+  "animated-overlay": 30,
 };
 const MIN_TRIM_DURATION_SEC = 1;
 
 /** Where to insert a new row when dropping off-track: video/text at top; audio under first video (or append if no video). */
 export function getInsertIndexForNewTrack(tracks: Track[], trackType: TrackType): number {
-  if (trackType === "video" || trackType === "text" || trackType === "sticker" || trackType === "filter") {
+  if (trackType === "video" || trackType === "text" || trackType === "sticker" || trackType === "filter" || trackType === "video-effect" || trackType === "body-effect") {
     return 0;
   }
   const mainIdx = tracks.findIndex((t) => t.type === "video");
@@ -128,6 +131,39 @@ export function getInsertIndexForNewTrack(tracks: Track[], trackType: TrackType)
     return mainIdx + 1;
   }
   return tracks.length;
+}
+
+/**
+ * Find the best insertion index for a new track, grouping effects/filters by their mediaId.
+ * For effects and filters, this places new tracks immediately adjacent to existing tracks
+ * that use the same effect/filter (same mediaId).
+ */
+export function getInsertIndexForNewTrackGrouped(tracks: Track[], clips: Clip[], trackType: TrackType, mediaId?: string): number {
+  // Only apply grouping logic for effects and filters
+  if (!mediaId || (trackType !== "filter" && trackType !== "video-effect" && trackType !== "body-effect" && trackType !== "animated-overlay")) {
+    return getInsertIndexForNewTrack(tracks, trackType);
+  }
+
+  // Find all tracks of the same type that have clips with the same mediaId
+  const siblingTrackIndices: number[] = [];
+
+  tracks.forEach((track, index) => {
+    if (track.type === trackType) {
+      const hasMatchingClip = clips.some((clip) => clip.trackId === track.id && clip.mediaId === mediaId);
+      if (hasMatchingClip) {
+        siblingTrackIndices.push(index);
+      }
+    }
+  });
+
+  // If we found sibling tracks with the same effect, insert immediately after the last one
+  if (siblingTrackIndices.length > 0) {
+    const lastSiblingIndex = Math.max(...siblingTrackIndices);
+    return lastSiblingIndex + 1;
+  }
+
+  // No siblings found, use default placement
+  return getInsertIndexForNewTrack(tracks, trackType);
 }
 
 /**
@@ -220,7 +256,7 @@ export const useTimelineStore = create<TimelineStore>(
       const finalTracks = payload?.tracks ?? [];
       const finalClipsRaw = payload?.clips ?? [];
       const finalTransitions = payload?.transitions ?? [];
-      const finalGaps = (payload as any)?.gaps ?? []; // Load gaps from project (cast for backwards compatibility)
+      const finalGaps = (payload as any)?.gaps ?? []; // Load gaps from project
 
       // Normalize clip timing with media asset data
       const mediaAssets = useProjectStore.getState().mediaAssets;
@@ -234,7 +270,7 @@ export const useTimelineStore = create<TimelineStore>(
       set({
         tracks: finalTracks,
         clips: normalizedClips,
-        gaps: finalGaps, // NEW: Load gaps
+        gaps: finalGaps, // Load gaps from project
         transitions: finalTransitions,
         scrollLeft: 0,
         zoomLevel: TIMELINE_ZOOM_DEFAULT,
@@ -242,11 +278,16 @@ export const useTimelineStore = create<TimelineStore>(
         epoch: 0, // Reset epoch on project load
       });
 
-      // If gaps weren't in project file (legacy), detect them
+      // If no gaps in project file (legacy), detect them once after state is loaded
       if (finalGaps.length === 0 && normalizedClips.length > 0) {
-        setTimeout(() => {
-          get().detectAndSyncGaps();
-        }, 0);
+        // Use requestAnimationFrame instead of setTimeout for better timing
+        requestAnimationFrame(() => {
+          // Double-check we still have no gaps (race condition protection)
+          const currentState = get();
+          if (currentState.gaps.length === 0) {
+            currentState.detectAndSyncGaps();
+          }
+        });
       }
     },
 
@@ -376,9 +417,19 @@ export const useTimelineStore = create<TimelineStore>(
           epoch: state.epoch + 1,
         };
       });
+
+      // Detect and sync gaps on the affected track after clip addition
+      // Use requestAnimationFrame to ensure state update is complete
+      requestAnimationFrame(() => {
+        get().detectAndSyncGaps(clip.trackId);
+      });
     },
 
     removeClip: (clipId) => {
+      const state = get();
+      const clipToRemove = state.clips.find((c) => c.id === clipId);
+      const removedTrackId = clipToRemove?.trackId;
+
       set((state) => {
         const clipToRemove = state.clips.find((c) => c.id === clipId);
         const remainingClips = state.clips.filter((c) => c.id !== clipId);
@@ -418,6 +469,14 @@ export const useTimelineStore = create<TimelineStore>(
         }
         return next;
       });
+
+      // Detect and sync gaps on the affected track after clip removal
+      // Use requestAnimationFrame to ensure state update is complete
+      if (removedTrackId) {
+        requestAnimationFrame(() => {
+          get().detectAndSyncGaps(removedTrackId);
+        });
+      }
     },
 
     addTransition: (transition) => {
@@ -919,7 +978,7 @@ export const useTimelineStore = create<TimelineStore>(
         return null;
       }
 
-      const result = insertGapWithRipple(trackId, startTime, duration, state.clips, "user-insert");
+      const result = insertGapWithRipple(trackId, startTime, duration, state.clips, state.gaps, "user-insert");
 
       if (!result.success || !result.gap) {
         return null;
@@ -955,7 +1014,7 @@ export const useTimelineStore = create<TimelineStore>(
       const track = state.tracks.find((t) => t.id === gap.trackId);
       if (track?.locked) return;
 
-      const result = removeGapWithRipple(gap, state.clips);
+      const result = removeGapWithRipple(gap, state.clips, state.gaps);
 
       if (!result.success) return;
 
@@ -987,7 +1046,7 @@ export const useTimelineStore = create<TimelineStore>(
       const track = state.tracks.find((t) => t.id === gap.trackId);
       if (track?.locked) return;
 
-      const result = resizeGap(gap, newDuration, state.clips);
+      const result = resizeGap(gap, newDuration, state.clips, state.gaps);
 
       if (!result.success || !result.gap) return;
 
@@ -1040,21 +1099,54 @@ export const useTimelineStore = create<TimelineStore>(
       const state = get();
       const tracksToProcess = trackId ? state.tracks.filter((t) => t.id === trackId) : state.tracks;
 
-      let newGaps: Gap[] = [...state.gaps];
+      // Start with gaps from tracks we're NOT processing (keep them as-is)
+      const trackIdsToProcess = new Set(tracksToProcess.map((t) => t.id));
+      let newGaps: Gap[] = state.gaps.filter((g) => !trackIdsToProcess.has(g.trackId));
 
       for (const track of tracksToProcess) {
         const trackClips = state.clips.filter((c) => c.trackId === track.id);
-        const existingTrackGaps = state.gaps.filter((g) => g.trackId === track.id);
 
-        // Detect new gaps
-        const detectedGaps = detectGaps(trackClips, existingTrackGaps);
+        // COMPLETE REDETECTION: Detect all gaps fresh (don't preserve existing)
+        // This ensures gaps always have the correct duration after clip moves
+        const detectedGaps = detectGaps(trackClips, []);
 
-        // Add newly detected gaps
-        newGaps = [...newGaps, ...detectedGaps];
+        // Preserve protected gaps (match by position and update duration)
+        const existingProtectedGaps = state.gaps.filter((g) => g.trackId === track.id && g.protected);
+
+        // For each protected gap, check if it still exists and update its duration
+        const validProtectedGaps: Gap[] = [];
+        for (const protectedGap of existingProtectedGaps) {
+          // Check if there's a detected gap at this position
+          const matchingGap = detectedGaps.find((detected) => Math.abs(detected.startTime - protectedGap.startTime) < 0.001);
+
+          if (matchingGap) {
+            // Gap still exists - update duration and mark as protected
+            validProtectedGaps.push({
+              ...matchingGap,
+              id: protectedGap.id,
+              protected: true,
+              type: protectedGap.type,
+              metadata: protectedGap.metadata,
+            });
+
+            // Remove from detectedGaps so we don't duplicate it
+            const index = detectedGaps.indexOf(matchingGap);
+            if (index > -1) {
+              detectedGaps.splice(index, 1);
+            }
+          }
+          // If no matching gap, the protected gap was filled by a clip (don't preserve)
+        }
+
+        // Combine valid protected gaps with new detected gaps
+        newGaps = [...newGaps, ...validProtectedGaps, ...detectedGaps];
       }
 
+      // Merge adjacent auto-detected gaps to reduce visual clutter
+      const mergedGaps = mergeAdjacentGaps(newGaps);
+
       set((state) => ({
-        gaps: newGaps,
+        gaps: mergedGaps,
       }));
     },
 
