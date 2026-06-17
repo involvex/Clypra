@@ -362,20 +362,20 @@ export const useEffectsStore = create<EffectsState>((set, get) => ({
     const data = await res.json();
     const fetchTime = (performance.now() - startTime).toFixed(2);
 
-    console.log(`[EffectsStore:Cache] ✅ API FETCH SUCCESS - Effect "${id}" downloaded in ${fetchTime}ms`);
-    console.log(`[EffectsStore:Cache] 📦 Raw data has fontFamily:`, data.fontFamily);
-    console.log(`[EffectsStore:Cache] 💾 Caching effect "${id}" to memory + IndexedDB (raw format)`);
+    const definition = convertRawConfigToDefinition(data);
 
-    // Store raw data in all cache layers (no transformation)
+    console.log(`[EffectsStore:Cache] ✅ API FETCH SUCCESS - Effect "${id}" downloaded in ${fetchTime}ms`);
+    console.log(`[EffectsStore:Cache] 💾 Caching effect "${id}" to memory + IndexedDB`);
+
+    // Store definition in all cache layers
     set((state) => ({
-      definitions: { ...state.definitions, [id]: data },
+      definitions: { ...state.definitions, [id]: definition },
     }));
-    await persistentCache.set(id, data); // Persist to disk
+    await persistentCache.set(id, definition); // Persist to disk
 
     console.log(`[EffectsStore:Cache] ✅ CACHE SAVED - Effect "${id}" now available in all cache layers`);
 
-    return data;
-    return data;
+    return definition;
   },
 
   // ── selectEffect ─────────────────────────────────────────────
@@ -439,15 +439,17 @@ export const useEffectsStore = create<EffectsState>((set, get) => ({
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then((data: EffectFullDefinition) => {
+      .then((data) => {
         const prefetchTime = (performance.now() - startTime).toFixed(2);
         console.log(`[EffectsStore:Prefetch] ✅ Prefetch complete for ${id} in ${prefetchTime}ms`);
+
+        const definition = convertRawConfigToDefinition(data);
 
         set((s) => {
           const nextPrefetching = new Set(s.prefetchingIds);
           nextPrefetching.delete(id);
           return {
-            definitions: { ...s.definitions, [id]: data },
+            definitions: { ...s.definitions, [id]: definition },
             prefetchingIds: nextPrefetching,
           };
         });
