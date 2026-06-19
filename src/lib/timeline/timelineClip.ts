@@ -52,7 +52,7 @@ export function getTimelineContentEnd(clips: Pick<Clip, "startTime" | "trimIn" |
 }
 
 export function getTimelineViewportEnd(contentEnd: number): number {
-  return Math.max(contentEnd, 10);
+  return contentEnd > 0 ? contentEnd : 10;
 }
 
 interface CreateClipFromAssetParams {

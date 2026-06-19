@@ -85,20 +85,7 @@ describe("TemplateCard Component", () => {
     expect(img.alt).toBe("Minimal Lower Third");
   });
 
-  it("prefetches Lottie data from API on mouse enter/hover", async () => {
-    const mockLottieData = {
-      id: "template-1",
-      category: "lower-third",
-      label: "Minimal Lower Third",
-      duration: 2,
-      canvasWidth: 1920,
-      canvasHeight: 1080,
-      thumbnail: "",
-      preview: "",
-      layers: []
-    };
-    vi.mocked(TextEffectsApi.getLottieTemplate).mockResolvedValue(mockLottieData);
-
+  it("renders the preview player on hover without fetching Lottie JSON data", async () => {
     render(<TemplateCard {...defaultProps} />);
 
     const card = screen.getByRole("img").closest("div");
@@ -107,13 +94,12 @@ describe("TemplateCard Component", () => {
       fireEvent.mouseEnter(card);
     }
 
-    // Displays Loader during fetch
-    expect(screen.getByText("Loading...")).toBeInTheDocument();
+    // Does NOT display "Loading..."
+    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(TextEffectsApi.getLottieTemplate).toHaveBeenCalledWith("lower-third", "template-1");
-      expect(screen.getByTestId("mock-lottie-player")).toBeInTheDocument();
-    });
+    // Renders player immediately
+    expect(screen.getByTestId("mock-lottie-player")).toBeInTheDocument();
+    expect(TextEffectsApi.getLottieTemplate).not.toHaveBeenCalled();
   });
 
   it("calls onPreview when clicked", () => {

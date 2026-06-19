@@ -60,7 +60,7 @@ const templateCategories = TEMPLATE_CATEGORIES.map((cat) =>
 
 export const TextTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
   const [activeTab, setActiveTab] = useState<"effects" | "templates" | "yours" | "captions">("effects");
-  const [activeCategory, setActiveCategory] = useState<string>("3D");
+  const [activeCategory, setActiveCategory] = useState<string>("Lower Third");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
   // Consume global favorites and downloads store
@@ -77,25 +77,13 @@ export const TextTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
   // Dynamic API states for Text Effects and Templates
   const { templates, loadTemplates, selectTemplate, isApiConnected: isTemplatesApiConnected, isLoading: isTemplatesLoading } = useTemplateStore();
   const { selectedEffect, clearSelected } = useEffectsStore();
-  const [isEffectsLoading, setIsEffectsLoading] = useState(false);
-  const [isEffectsApiConnected, setIsEffectsApiConnected] = useState(false);
 
-  // Fetch from the API on mount
+  // Load templates only when the "templates" sub-tab is active and templates are not loaded yet
   useEffect(() => {
-    loadTemplates();
-
-    setIsEffectsLoading(true);
-    TextEffectsApi.checkApiHealth()
-      .then((isOnline: boolean) => {
-        setIsEffectsApiConnected(isOnline);
-      })
-      .catch(() => {
-        setIsEffectsApiConnected(false);
-      })
-      .finally(() => {
-        setIsEffectsLoading(false);
-      });
-  }, []);
+    if (activeTab === "templates" && templates.length === 0) {
+      loadTemplates();
+    }
+  }, [activeTab, templates.length]);
 
   const hasAudioOrVideoClips = clips.some((clip) => {
     const asset = mediaAssets.find((a) => a.id === clip.mediaId);
@@ -345,7 +333,7 @@ export const TextTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
     if (tab === "effects") {
       setActiveCategory("3D");
     } else if (tab === "templates") {
-      setActiveCategory("Title");
+      setActiveCategory("Lower Third");
     } else if (tab === "yours") {
       setActiveCategory("Favorites");
     } else {
@@ -363,23 +351,40 @@ export const TextTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
     const itemId = item.id;
     if (downloadingIds.includes(itemId)) return;
 
-    startDownload(itemId);
+    const isDownloaded = type === "template"
+      ? downloadedTemplates.includes(itemId)
+      : downloadedEffects.includes(itemId);
 
-    // Lazy load the full vector parameters concurrently with the spinner
-    let fullEffect: any = null;
-    if (type === "effect") {
-      try {
-        fullEffect = await TextEffectsApi.getFullEffect(item.category, item.id);
-      } catch (err) {
-        console.error("[Clypra:TextTab] Failed to lazy load detailed config on click:", err);
+    if (!isDownloaded) {
+      startDownload(itemId);
+
+      // Lazy load the full vector parameters concurrently with the spinner
+      if (type === "effect") {
+        try {
+          await TextEffectsApi.getFullEffect(item.category, item.id);
+        } catch (err) {
+          console.error("[Clypra:TextTab] Failed to lazy load detailed config on click:", err);
+        }
+      } else {
+        try {
+          await selectTemplate(item);
+        } catch (err) {
+          console.error("[Clypra:TextTab] Failed to lazy load Lottie data on click:", err);
+        }
       }
-    }
 
-    setTimeout(() => {
-      completeDownload(itemId, type);
-
+      setTimeout(() => {
+        completeDownload(itemId, type);
+      }, 850);
+    } else {
       // Apply to timeline
       if (type === "effect") {
+        let fullEffect: any = null;
+        try {
+          fullEffect = await TextEffectsApi.getFullEffect(item.category, item.id);
+        } catch (err) {
+          console.error("[Clypra:TextTab] Failed to get effect config on apply:", err);
+        }
         const targetEffect = fullEffect || item;
         onAddToTimeline?.(
           {
@@ -408,14 +413,14 @@ export const TextTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
         // Quick apply template with default customization if bypass preview
         onAddToTimeline?.(
           {
-            name: item.name,
+            name: item.name || item.label,
             presetType: "template",
             templateId: item.id,
           },
           "text",
         );
       }
-    }, 850);
+    }
   };
 
   const handleTemplateAdd = (template: TemplateDefinition, customization: TemplateCustomization) => {
@@ -474,8 +479,8 @@ export const TextTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
   const favoriteTemplatesList = templates.filter((t) => favorites.includes(t.id));
 
   // Global connection status
-  const isCloudConnected = isEffectsApiConnected || isTemplatesApiConnected;
-  const isLibraryLoading = isEffectsLoading || isTemplatesLoading;
+  const isCloudConnected = isTemplatesApiConnected;
+  const isLibraryLoading = isTemplatesLoading;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-surface/5 select-none">
@@ -505,65 +510,65 @@ export const TextTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
 
       {/* ── Main content Scrollable Grid area ───────────────────────── */}
       <div className="grow overflow-y-auto scrollbar-thin">
-        {isLibraryLoading ? (
-          <div className="h-40 flex flex-col items-center justify-center gap-2 text-text-muted text-xs">
-            <Loader2 className="w-6 h-6 text-accent animate-spin" />
-            <p className="font-semibold text-text-muted/80">Updating effects & templates library...</p>
-          </div>
-        ) : (
-          <>
-            {/* Yours/Favorites Display */}
-            {activeTab === "yours" && (
-              <div>
-                <h4 className="text-xs font-semibold text-text-muted mb-2.5 uppercase tracking-wide">Favorite Templates ({favoriteTemplatesList.length})</h4>
-                {favoriteTemplatesList.length === 0 ? (
-                  <p className="text-xs text-text-muted/60 italic py-2 pl-1">No favorite templates saved.</p>
-                ) : (
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {favoriteTemplatesList.map((template) => (
-                      <TemplateCard key={template.id} template={template} isFavorite={true} isDownloading={downloadingIds.includes(template.id)} isDownloaded={downloadedTemplates.includes(template.id)} onFavorite={(e) => handleToggleFavorite(template.id, e)} onApply={(e) => handleDownloadAndApply(template, "template", e)} onPreview={() => handlePreview(template, "template")} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Effects Display Grid */}
-            {activeTab === "effects" && <NewEffectGrid searchQuery={searchQuery} onAddToTimeline={onAddToTimeline} />}
-
-            {/* Templates Display Grid */}
-            {activeTab === "templates" && (
-              <div className="flex flex-col h-full">
-                {/* Category tabs for templates */}
-                <div className="relative shrink-0 border-b border-border/40 bg-surface/5">
-                  <div className="absolute left-0 top-0 bottom-0 w-3 bg-linear-to-l to-surface from-transparent pointer-events-none z-10" />
-                  <div className="flex overflow-x-auto gap-2 p-1 whitespace-nowrap" style={{ scrollbarWidth: "none" }}>
-                    {templateCategories.map((cat) => (
-                      <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-2 py-1 text-xs font-medium rounded-sm transition-colors cursor-pointer hover:bg-accent/10 hover:text-accent ${activeCategory === cat ? "bg-accent/10 text-accent" : "text-text-muted"}`}>
-                        {cat}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="absolute right-0 top-0 bottom-0 w-3 bg-linear-to-l from-surface to-transparent pointer-events-none z-10" />
+        <>
+          {/* Yours/Favorites Display */}
+          {activeTab === "yours" && (
+            <div>
+              <h4 className="text-xs font-semibold text-text-muted mb-2.5 uppercase tracking-wide">Favorite Templates ({favoriteTemplatesList.length})</h4>
+              {favoriteTemplatesList.length === 0 ? (
+                <p className="text-xs text-text-muted/60 italic py-2 pl-1">No favorite templates saved.</p>
+              ) : (
+                <div className="grid grid-cols-3 gap-1.5">
+                  {favoriteTemplatesList.map((template) => (
+                    <TemplateCard key={template.id} template={template} isFavorite={true} isDownloading={downloadingIds.includes(template.id)} isDownloaded={downloadedTemplates.includes(template.id)} onFavorite={(e) => handleToggleFavorite(template.id, e)} onApply={(e) => handleDownloadAndApply(template, "template", e)} onPreview={() => handlePreview(template, "template")} />
+                  ))}
                 </div>
+              )}
+            </div>
+          )}
 
-                {/* Templates grid */}
-                {filteredTemplates.length === 0 ? (
-                  <div className="h-40 flex flex-col items-center justify-center text-text-muted gap-1 text-xs">
-                    <p>No matching templates found</p>
-                    <p className="opacity-60">Try searching other categories</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {filteredTemplates.map((template) => (
-                      <TemplateCard key={template.id} template={template} isFavorite={favorites.includes(template.id)} isDownloading={downloadingIds.includes(template.id)} isDownloaded={downloadedTemplates.includes(template.id)} onFavorite={(e) => handleToggleFavorite(template.id, e)} onApply={(e) => handleDownloadAndApply(template, "template", e)} onPreview={() => handlePreview(template, "template")} />
-                    ))}
-                  </div>
-                )}
+          {/* Effects Display Grid */}
+          {activeTab === "effects" && (
+            <NewEffectGrid searchQuery={searchQuery} onAddToTimeline={onAddToTimeline} />
+          )}
+
+          {/* Templates Display Grid */}
+          {activeTab === "templates" && (
+            <div className="flex flex-col h-full">
+              {/* Category tabs for templates */}
+              <div className="relative shrink-0 border-b border-border/40 bg-surface/5">
+                <div className="absolute left-0 top-0 bottom-0 w-3 bg-linear-to-l to-surface from-transparent pointer-events-none z-10" />
+                <div className="flex overflow-x-auto gap-2 p-1 whitespace-nowrap" style={{ scrollbarWidth: "none" }}>
+                  {templateCategories.map((cat) => (
+                    <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-2 py-1 text-xs font-medium rounded-sm transition-colors cursor-pointer hover:bg-accent/10 hover:text-accent ${activeCategory === cat ? "bg-accent/10 text-accent" : "text-text-muted"}`}>
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+                <div className="absolute right-0 top-0 bottom-0 w-3 bg-linear-to-l from-surface to-transparent pointer-events-none z-10" />
               </div>
-            )}
-          </>
-        )}
+
+              {/* Templates grid */}
+              {isTemplatesLoading ? (
+                <div className="h-40 flex flex-col items-center justify-center gap-2 text-text-muted text-xs">
+                  <Loader2 className="w-6 h-6 text-accent animate-spin" />
+                  <p className="font-semibold text-text-muted/80">Updating templates library...</p>
+                </div>
+              ) : filteredTemplates.length === 0 ? (
+                <div className="h-40 flex flex-col items-center justify-center text-text-muted gap-1 text-xs">
+                  <p>No matching templates found</p>
+                  <p className="opacity-60">Try searching other categories</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-1.5">
+                  {filteredTemplates.map((template) => (
+                    <TemplateCard key={template.id} template={template} isFavorite={favorites.includes(template.id)} isDownloading={downloadingIds.includes(template.id)} isDownloaded={downloadedTemplates.includes(template.id)} onFavorite={(e) => handleToggleFavorite(template.id, e)} onApply={(e) => handleDownloadAndApply(template, "template", e)} onPreview={() => handlePreview(template, "template")} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </>
 
         {/* Auto Captions Panel */}
         {activeTab === "captions" && (

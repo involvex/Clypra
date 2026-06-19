@@ -39,14 +39,14 @@ const BASE = getApiBaseUrl();
 export const AUDIO_LIBRARY_CATEGORIES: AudioLibraryCategory[] = ["music", "cinematic", "upbeat", "lo-fi", "hip-hop", "ambient", "sfx"];
 
 export const AudioLibraryApi = {
-  async getAudioIndex(): Promise<AudioLibraryItem[]> {
-    const res = await fetch(`${BASE}/audio`, {
-      cache: "reload",
-      headers: getApiHeaders(),
-    });
-    if (!res.ok) throw new Error("Failed to load audio library");
-    return res.json();
-  },
+  // async getAudioIndex(): Promise<AudioLibraryItem[]> {
+  //   const res = await fetch(`${BASE}/audio`, {
+  //     cache: "reload",
+  //     headers: getApiHeaders(),
+  //   });
+  //   if (!res.ok) throw new Error("Failed to load audio library");
+  //   return res.json();
+  // },
 
   async getAudioByCategory(category: AudioLibraryCategory): Promise<AudioLibraryItem[]> {
     const res = await fetch(`${BASE}/audio/${category}`, {

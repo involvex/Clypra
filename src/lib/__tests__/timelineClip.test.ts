@@ -65,8 +65,8 @@ describe("timelineClip timing helpers", () => {
       expect(getTimelineViewportEnd(0)).toBe(10);
     });
 
-    it("returns at least 10 seconds for short content", () => {
-      expect(getTimelineViewportEnd(4.365)).toBe(10);
+    it("returns content end for short content", () => {
+      expect(getTimelineViewportEnd(4.365)).toBe(4.365);
     });
 
     it("returns content end for content longer than 10s", () => {

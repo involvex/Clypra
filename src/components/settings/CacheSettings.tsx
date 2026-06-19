@@ -78,48 +78,7 @@ export const CacheSettings: React.FC = () => {
     }
   };
 
-  const handleClearServerCache = async () => {
-    setIsClearingApi(true);
-    setApiCacheStatus(null);
 
-    try {
-      const result = await TextEffectsApi.purgeAllCaches();
-      const { server } = result;
-
-      const kvDeleted = server.kv?.totalDeleted || 0;
-      const cacheApiPurged = server.cacheApi?.purged || 0;
-
-      setApiCacheStatus({
-        type: "success",
-        message: `All caches cleared: Local ✓, KV (${kvDeleted} keys), Cache API (${cacheApiPurged} entries)`,
-      });
-    } catch (error: any) {
-      console.error("[CacheSettings] Cache purge failed:", error);
-
-      // Provide helpful error messages
-      let errorMessage = "Failed to clear server caches.";
-
-      if (error.message?.includes("404")) {
-        errorMessage = "Cache endpoint not found (404). The API may need to be deployed. Check DEPLOYMENT_STEPS.md";
-      } else if (error.message?.includes("401")) {
-        errorMessage = "Unauthorized (401). Check that VITE_CLYPRA_API_KEY is configured correctly.";
-      } else if (error.message?.includes("403")) {
-        errorMessage = "Forbidden (403). Your API key doesn't have admin permissions.";
-      } else if (error.message?.includes("429")) {
-        errorMessage = "Rate limited (429). Too many requests. Please wait a minute and try again.";
-      } else if (error.message) {
-        errorMessage = error.message;
-      }
-
-      setApiCacheStatus({
-        type: "error",
-        message: errorMessage,
-      });
-    } finally {
-      setIsClearingApi(false);
-      setTimeout(() => setApiCacheStatus(null), 10000); // Keep error visible longer
-    }
-  };
 
   return (
     <div className="space-y-3">
@@ -255,27 +214,19 @@ export const CacheSettings: React.FC = () => {
           </div>
         )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <button onClick={handleClearLocalApiCache} disabled={isClearingApi} className="flex items-center gap-3 p-4 bg-surface-raised/20 hover:bg-surface-raised/40 border border-white/6 hover:border-blue-500/30 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
+        <div className="w-full">
+          <button onClick={handleClearLocalApiCache} disabled={isClearingApi} className="w-full flex items-center gap-3 p-4 bg-surface-raised/20 hover:bg-surface-raised/40 border border-white/6 hover:border-blue-500/30 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
             <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">{isClearingApi ? <RefreshCw className="w-5 h-5 text-blue-400 animate-spin" /> : <Database className="w-5 h-5 text-blue-400" />}</div>
             <div className="text-left flex-1">
               <div className="font-medium text-text-primary text-xs">Clear Local Cache</div>
               <div className="text-[10px] text-text-muted">Memory + IndexedDB</div>
             </div>
           </button>
-
-          <button onClick={handleClearServerCache} disabled={isClearingApi} className="flex items-center gap-3 p-4 bg-surface-raised/20 hover:bg-surface-raised/40 border border-white/6 hover:border-purple-500/30 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
-            <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">{isClearingApi ? <RefreshCw className="w-5 h-5 text-purple-400 animate-spin" /> : <Cloud className="w-5 h-5 text-purple-400" />}</div>
-            <div className="text-left flex-1">
-              <div className="font-medium text-text-primary text-xs">Clear Server Cache</div>
-              <div className="text-[10px] text-text-muted">KV + Cache API</div>
-            </div>
-          </button>
         </div>
 
         <div className="flex items-start gap-3 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
           <AlertCircle className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
-          <p className="text-[11px] text-blue-200/90">Local cache stores effects on your device for faster access. Server cache requires admin API key.</p>
+          <p className="text-[11px] text-blue-200/90">Local cache stores effects on your device for faster access.</p>
         </div>
       </div>
 

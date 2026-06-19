@@ -286,7 +286,7 @@ export const ProgramPreview: React.FC = () => {
       const endTime = clip.startTime + clip.duration;
       return Math.max(max, endTime);
     }, 0);
-    const newDuration = Math.max(maxEndTime, 10);
+    const newDuration = maxEndTime > 0 ? maxEndTime : 10;
     const newFrameRate = project.frameRate || 30;
     if (newDuration !== prevDurationRef.current) {
       setDuration(newDuration);

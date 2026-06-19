@@ -2,7 +2,7 @@ import React, {
   useEffect, useRef, useImperativeHandle,
   forwardRef, useState
 } from 'react';
-import { TemplateRenderer, TextTemplate } from '@clypra/engine';
+import { TemplateRenderer } from '@clypra/engine';
 
 export interface TemplatePreviewPlayerHandle {
   play:        () => void;
@@ -25,6 +25,8 @@ export interface TemplatePreviewPlayerProps {
   onError?:     (error: string) => void;
   className?:   string;
   onFrameChange?: (currentFrame: number, totalFrames: number) => void;
+  mode?:        "video" | "canvas" | "auto";
+  fitToContent?: boolean;
 }
 
 export const TemplatePreviewPlayer = forwardRef<TemplatePreviewPlayerHandle, TemplatePreviewPlayerProps>(
@@ -41,10 +43,15 @@ export const TemplatePreviewPlayer = forwardRef<TemplatePreviewPlayerHandle, Tem
     onError,
     className,
     onFrameChange,
+    mode      = "auto",
+    fitToContent = false,
   }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const videoRef = useRef<HTMLVideoElement | null>(null);
+
     const [isPlaying, setIsPlaying] = useState(autoplay);
     const [currentTime, setCurrentTime] = useState(0);
+
     const requestRef = useRef<number | null>(null);
     const previousTimeRef = useRef<number | null>(null);
 
@@ -58,6 +65,12 @@ export const TemplatePreviewPlayer = forwardRef<TemplatePreviewPlayerHandle, Tem
       onFrameChangeRef.current = onFrameChange;
     });
 
+    const resolvedMode = mode !== "auto"
+      ? mode
+      : (template && (template.layers || template.assets || template.animation))
+        ? "canvas"
+        : "video";
+
     // Expose Lottie player compatible controller handles
     useImperativeHandle(ref, () => ({
       play: () => {
@@ -68,17 +81,30 @@ export const TemplatePreviewPlayer = forwardRef<TemplatePreviewPlayerHandle, Tem
       },
       stop: () => {
         setIsPlaying(false);
-        setCurrentTime(0);
+        if (resolvedMode === "canvas") {
+          setCurrentTime(0);
+        } else {
+          if (videoRef.current) {
+            videoRef.current.currentTime = 0;
+          }
+        }
       },
       goToFrame: (frame: number) => {
         setIsPlaying(false);
         if (template) {
           const fps = template.fps || 30;
-          setCurrentTime(frame / fps);
+          const targetTime = frame / fps;
+          if (resolvedMode === "canvas") {
+            setCurrentTime(targetTime);
+          } else {
+            if (videoRef.current) {
+              videoRef.current.currentTime = targetTime;
+            }
+          }
         }
       },
       getAnimation: () => ({
-        totalFrames: template ? Math.round(template.duration * (template.fps || 30)) : 0,
+        totalFrames: template ? Math.round((template.duration || 4) * (template.fps || 30)) : 0,
         frameRate: template?.fps || 30,
         isLoaded: !!template,
       }),
@@ -86,43 +112,36 @@ export const TemplatePreviewPlayer = forwardRef<TemplatePreviewPlayerHandle, Tem
 
     // Trigger ready callback on mount if data is present
     useEffect(() => {
-      if (template) {
+      if (template && (resolvedMode === "canvas" || videoRef.current)) {
         onReadyRef.current?.();
       }
-    }, [template]);
+    }, [template, resolvedMode]);
 
-    // Apply initial frame once template is loaded
+    // ==========================================
+    // CANVAS MODE EFFECTS
+    // ==========================================
     useEffect(() => {
-      if (template && initialFrame !== undefined) {
-        const fps = template.fps || 30;
-        setCurrentTime(initialFrame / fps);
-      }
-    }, [template, initialFrame]);
-
-    // Redraw loop
-    useEffect(() => {
-      if (!template || !canvasRef.current) return;
+      if (resolvedMode !== "canvas" || !template || !canvasRef.current) return;
       const canvas = canvasRef.current;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
       const renderer = new TemplateRenderer(template);
-      renderer.drawFrame(ctx, currentTime);
+      renderer.drawFrame(ctx, currentTime, fitToContent);
 
       // Fire frame updates
       const fps = template.fps || 30;
-      const totalFrames = Math.round(template.duration * fps);
+      const totalFrames = Math.round((template.duration || 4) * fps);
       const currentFrame = Math.round(currentTime * fps);
       onFrameChangeRef.current?.(currentFrame, totalFrames);
-    }, [template, currentTime]);
+    }, [resolvedMode, template, currentTime, fitToContent]);
 
-    // Animation Tick
     const tick = (timestamp: number) => {
       if (previousTimeRef.current !== null && template) {
         const elapsed = (timestamp - previousTimeRef.current) / 1000;
         const nextTime = currentTime + elapsed * speed;
         
-        if (nextTime >= template.duration) {
+        if (nextTime >= (template.duration || 4)) {
           if (loop) {
             setCurrentTime(0);
           } else {
@@ -138,6 +157,8 @@ export const TemplatePreviewPlayer = forwardRef<TemplatePreviewPlayerHandle, Tem
     };
 
     useEffect(() => {
+      if (resolvedMode !== "canvas") return;
+
       if (isPlaying) {
         previousTimeRef.current = null;
         requestRef.current = requestAnimationFrame(tick);
@@ -149,7 +170,44 @@ export const TemplatePreviewPlayer = forwardRef<TemplatePreviewPlayerHandle, Tem
       return () => {
         if (requestRef.current) cancelAnimationFrame(requestRef.current);
       };
-    }, [isPlaying, currentTime, speed, template]);
+    }, [resolvedMode, isPlaying, currentTime, speed, template]);
+
+    useEffect(() => {
+      if (resolvedMode === "canvas" && template && initialFrame !== undefined) {
+        const fps = template.fps || 30;
+        setCurrentTime(initialFrame / fps);
+      }
+    }, [resolvedMode, template, initialFrame]);
+
+    // ==========================================
+    // VIDEO MODE EFFECTS
+    // ==========================================
+    useEffect(() => {
+      if (resolvedMode !== "video") return;
+      const video = videoRef.current;
+      if (!video) return;
+
+      if (isPlaying) {
+        video.play().catch((err) => {
+          console.warn("Video play failed:", err);
+        });
+      } else {
+        video.pause();
+      }
+    }, [resolvedMode, isPlaying]);
+
+    useEffect(() => {
+      if (resolvedMode === "video" && videoRef.current) {
+        videoRef.current.playbackRate = speed;
+      }
+    }, [resolvedMode, speed]);
+
+    useEffect(() => {
+      if (resolvedMode === "video" && template && initialFrame !== undefined && videoRef.current) {
+        const fps = template.fps || 30;
+        videoRef.current.currentTime = initialFrame / fps;
+      }
+    }, [resolvedMode, template, initialFrame]);
 
     if (!template) {
       return (
@@ -159,13 +217,51 @@ export const TemplatePreviewPlayer = forwardRef<TemplatePreviewPlayerHandle, Tem
       );
     }
 
+    if (resolvedMode === "canvas") {
+      return (
+        <div className={className} style={{ position: 'relative', width, height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <canvas
+            ref={canvasRef}
+            width={template.canvasWidth || template.width || 800}
+            height={template.canvasHeight || template.height || 600}
+            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+          />
+        </div>
+      );
+    }
+
+    const previewUrl =
+      template.preview ||
+      `https://clypra-worker-api.abdulkabirmusa.com/media/text-templates/${template.category}/${template.id}.webm`;
+
     return (
       <div className={className} style={{ position: 'relative', width, height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <canvas
-          ref={canvasRef}
-          width={template.canvasWidth}
-          height={template.canvasHeight}
+        <video
+          ref={videoRef}
+          src={previewUrl}
+          loop={loop}
+          muted
+          playsInline
+          preload="auto"
           style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+          onLoadedData={() => {
+            onReadyRef.current?.();
+          }}
+          onEnded={() => {
+            if (!loop) {
+              setIsPlaying(false);
+              onCompleteRef.current?.();
+            }
+          }}
+          onTimeUpdate={() => {
+            const video = videoRef.current;
+            if (video && template) {
+              const fps = template.fps || 30;
+              const totalFrames = Math.round((template.duration || 4) * fps);
+              const currentFrame = Math.round(video.currentTime * fps);
+              onFrameChangeRef.current?.(currentFrame, totalFrames);
+            }
+          }}
         />
       </div>
     );
