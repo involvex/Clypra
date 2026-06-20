@@ -249,6 +249,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
     await preloadTextEffectDefinitionsFromClips(payload?.clips);
 
+    // Preload text templates and their fonts
+    try {
+      const { useTemplateStore } = await import("@/features/text-templates/templateStore");
+      await useTemplateStore.getState().preloadTemplatesAndFontsForClips(payload?.clips ?? []);
+    } catch (err) {
+      console.warn("[LoadProject] Failed to preload text templates and fonts:", err);
+    }
+
     // Let timelineStore hydrate its own state (respects ownership boundary)
     try {
       const { useTimelineStore } = await import("./timelineStore");

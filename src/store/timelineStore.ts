@@ -418,6 +418,15 @@ export const useTimelineStore = create<TimelineStore>(
         };
       });
 
+      // Trigger background preload if the added clip has a templateId
+      if (clip.templateId) {
+        import("@/features/text-templates/templateStore").then(({ useTemplateStore }) => {
+          useTemplateStore.getState().preloadTemplatesAndFontsForClips([clip]);
+        }).catch((err) => {
+          console.warn("[TimelineStore] Failed to trigger template preloading:", err);
+        });
+      }
+
       // Detect and sync gaps on the affected track after clip addition
       // Use requestAnimationFrame to ensure state update is complete
       requestAnimationFrame(() => {
@@ -601,6 +610,13 @@ export const useTimelineStore = create<TimelineStore>(
         }
         return next;
       });
+
+      // Trigger preload if templateId is updated
+      if (updates.templateId) {
+        import("@/features/text-templates/templateStore").then(({ useTemplateStore }) => {
+          useTemplateStore.getState().preloadTemplatesAndFontsForClips([{ templateId: updates.templateId }]);
+        }).catch((err) => console.warn("[TimelineStore] Failed to trigger template preloading on update:", err));
+      }
     },
 
     moveClip: (clipId, startTime) => {
