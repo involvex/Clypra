@@ -535,7 +535,7 @@ export const TextTab: React.FC<TabProps> = ({ onAddToTimeline }) => {
               <div className="relative shrink-0 border-b border-border/40 bg-surface/5">
                 <div className="flex overflow-x-auto gap-2 p-1 whitespace-nowrap" style={{ scrollbarWidth: "none" }}>
                   {templateCategories.map((cat) => (
-                    <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-2 py-1 text-[11px] font-medium rounded-sm transition-colors cursor-pointer hover:bg-accent/10 hover:text-accent ${activeCategory === cat ? "bg-accent/10 text-accent" : "text-text-muted"}`}>
+                    <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-2 py-1 text-[11px] font-medium rounded transition-colors cursor-pointer hover:bg-accent/10 hover:text-accent ${activeCategory === cat ? "bg-accent/10 text-accent" : "text-text-muted"}`}>
                       {cat}
                     </button>
                   ))}
