@@ -501,6 +501,13 @@ export const ProgramPreview: React.FC = () => {
       }
 
       rafId = requestAnimationFrame(renderLoop);
+
+      // Check isRendering FIRST
+      if (isRendering) {
+        droppedFramesRef.current++;
+        return;
+      }
+
       const session = getActiveSessionOrNull();
       if (session && session.state === "active") {
         try {
@@ -515,10 +522,7 @@ export const ProgramPreview: React.FC = () => {
           console.error(`[PreviewPanel ERROR] Exception calling syncPreviewMedia:`, error);
         }
       }
-      if (isRendering) {
-        droppedFramesRef.current++;
-        return;
-      }
+
       isRendering = true;
       lastRenderedTime = timeToRender;
       lastRenderedEpoch = state.epoch;
