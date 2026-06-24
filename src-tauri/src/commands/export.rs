@@ -186,6 +186,14 @@ pub async fn start_video_export(
     config: ExportConfig,
     on_progress: Channel<ExportProgress>,
 ) -> Result<String, String> {
+    // FIX (FINDING-003): Validate frame dimensions before starting export
+    if config.width == 0 || config.height == 0 {
+        return Err(format!("Invalid export dimensions: {}x{}", config.width, config.height));
+    }
+    if config.width > 7680 || config.height > 4320 {
+        return Err(format!("Export dimensions too large: {}x{} (max 7680x4320)", config.width, config.height));
+    }
+    
     // Generate session ID
     let session_id = uuid::Uuid::new_v4().to_string();
     
@@ -386,6 +394,18 @@ pub async fn write_export_frame(
     let session = sessions
         .get_mut(&session_id)
         .ok_or_else(|| format!("Export session not found: {}", session_id))?;
+    
+    // FIX (FINDING-003): Validate frame buffer size matches expected dimensions
+    // RGBA format = 4 bytes per pixel
+    let expected_size = (session.config.width * session.config.height * 4) as usize;
+    let actual_size = frame_data.len();
+    
+    if actual_size != expected_size {
+        return Err(format!(
+            "Frame buffer size mismatch: expected {} bytes ({}x{}x4), got {} bytes",
+            expected_size, session.config.width, session.config.height, actual_size
+        ));
+    }
     
     // Write frame data to FFmpeg stdin
     session
