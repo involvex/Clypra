@@ -124,6 +124,10 @@ struct ExportSession {
 
     /// Channel for progress updates
     on_progress: Channel<ExportProgress>,
+    
+    /// Export configuration (for frame size validation)
+    width: u32,
+    height: u32,
 }
 
 /// Global export sessions (keyed by session ID).
@@ -356,6 +360,8 @@ pub async fn start_video_export(
         total_frames: config.total_frames,
         start_time: std::time::Instant::now(),
         on_progress,
+        width: config.width,
+        height: config.height,
     };
     
     // Store session
@@ -397,13 +403,13 @@ pub async fn write_export_frame(
     
     // FIX (FINDING-003): Validate frame buffer size matches expected dimensions
     // RGBA format = 4 bytes per pixel
-    let expected_size = (session.config.width * session.config.height * 4) as usize;
+    let expected_size = (session.width * session.height * 4) as usize;
     let actual_size = frame_data.len();
     
     if actual_size != expected_size {
         return Err(format!(
             "Frame buffer size mismatch: expected {} bytes ({}x{}x4), got {} bytes",
-            expected_size, session.config.width, session.config.height, actual_size
+            expected_size, session.width, session.height, actual_size
         ));
     }
     

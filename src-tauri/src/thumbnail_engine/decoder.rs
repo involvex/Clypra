@@ -745,17 +745,52 @@ impl VideoDecoder {
     }
 }
 
-// ─── Global Decoder Pool ────────────────────────────────────────────────────
-// One decoder per video path. Created on first use, reused forever.
+// ─── Global Decoder Pool with LRU Eviction ──────────────────────────────────
+// One decoder per video path. Created on first use, reused with LRU tracking.
 // Mutex is per-video so decoders for different videos don't block each other.
 
-pub static DECODER_POOL: Lazy<DashMap<String, Arc<Mutex<VideoDecoder>>>> =
+use std::time::Instant;
+
+// Wrapper to track last access time for LRU eviction
+pub(crate) struct DecoderEntry {
+    decoder: Arc<Mutex<VideoDecoder>>,
+    last_accessed: Arc<Mutex<Instant>>,
+}
+
+pub(crate) static DECODER_POOL: Lazy<DashMap<String, DecoderEntry>> =
     Lazy::new(DashMap::new);
 
+// FIX (FINDING-014): Add pool size limit with proper LRU eviction
+const MAX_DECODER_POOL_SIZE: usize = 20;
+
 pub async fn get_decoder(path: &str) -> Result<Arc<Mutex<VideoDecoder>>, String> {
-    if let Some(existing) = DECODER_POOL.get(path) {
-        eprintln!("[get_decoder] Pool HIT for {}", path);
-        return Ok(existing.clone());
+    // Check if decoder exists and update access time
+    if let Some(entry) = DECODER_POOL.get_mut(path) {
+        // Update last accessed time (LRU tracking)
+        *entry.last_accessed.lock().await = Instant::now();
+        eprintln!("[get_decoder] Pool HIT for {} (LRU updated)", path);
+        return Ok(entry.decoder.clone());
+    }
+
+    // FIX (FINDING-014): Evict least recently used decoder if pool is full
+    if DECODER_POOL.len() >= MAX_DECODER_POOL_SIZE {
+        let mut oldest_key: Option<String> = None;
+        let mut oldest_time = Instant::now();
+
+        // Find the least recently used decoder
+        for entry in DECODER_POOL.iter() {
+            let last_accessed = *entry.value().last_accessed.lock().await;
+            if oldest_key.is_none() || last_accessed < oldest_time {
+                oldest_key = Some(entry.key().clone());
+                oldest_time = last_accessed;
+            }
+        }
+
+        if let Some(key) = oldest_key {
+            DECODER_POOL.remove(&key);
+            eprintln!("[get_decoder] Pool full ({} decoders), LRU evicted: {} (age: {:.1}s)", 
+                     MAX_DECODER_POOL_SIZE, key, oldest_time.elapsed().as_secs_f64());
+        }
     }
 
     // Create new decoder — this is the only slow path (~20-50ms once per video)
@@ -766,15 +801,23 @@ pub async fn get_decoder(path: &str) -> Result<Arc<Mutex<VideoDecoder>>, String>
         .map_err(|e| format!("Failed to open {}: {}", path, e))?;
 
     let arc = Arc::new(Mutex::new(decoder));
-    DECODER_POOL.insert(path.to_string(), arc.clone());
+    let entry = DecoderEntry {
+        decoder: arc.clone(),
+        last_accessed: Arc::new(Mutex::new(Instant::now())),
+    };
     
-    eprintln!("[get_decoder] Created decoder in {:?}", start.elapsed());
+    DECODER_POOL.insert(path.to_string(), entry);
+    
+    eprintln!("[get_decoder] Created decoder in {:?} (pool size: {})", 
+             start.elapsed(), DECODER_POOL.len());
     Ok(arc)
 }
 
 /// Call this when a clip is removed from the project to free memory
 pub fn release_decoder(path: &str) {
-    DECODER_POOL.remove(path);
+    if DECODER_POOL.remove(path).is_some() {
+        eprintln!("[release_decoder] Explicitly released decoder: {}", path);
+    }
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
