@@ -8,7 +8,6 @@
  * - Pool exhaustion handling
  * - Decoder reuse efficiency
  */
-
 #[cfg(test)]
 mod decoder_pool_stress_tests {
     use std::sync::{Arc, Mutex};
@@ -353,7 +352,7 @@ mod decoder_pool_stress_tests {
         let pool = TestDecoderPool::new(5);
 
         // Simulate real-world pattern: few hot videos, many cold ones
-        let hot_videos = vec!["/videos/hot1.mp4", "/videos/hot2.mp4"];
+        let hot_videos = ["/videos/hot1.mp4", "/videos/hot2.mp4"];
         let cold_videos: Vec<String> = (0..50).map(|i| format!("/videos/cold{}.mp4", i)).collect();
 
         // Access pattern: 80% hot, 20% cold
