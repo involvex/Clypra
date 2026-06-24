@@ -13,6 +13,9 @@ mod thumbnail_engine_tests;
 #[cfg(test)]
 mod thumbnail_engine_proptest;
 
+#[cfg(test)]
+mod decoder_pool_stress_test;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
