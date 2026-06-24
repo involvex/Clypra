@@ -239,10 +239,14 @@ pub async fn start_video_export(
             
             let fade_in = clip.fade_in.unwrap_or(0.0).max(0.0).min(clip.duration);
             let fade_out = clip.fade_out.unwrap_or(0.0).max(0.0).min(clip.duration);
+            
+            // FIX (FINDING-018): Ensure audio timebase alignment with video to prevent A/V drift
+            // Resample to consistent 48kHz before processing to match video timebase
             let mut chain = format!(
-                "[{}:a]atrim=start={:.3}:end={:.3},asetpts=PTS-STARTPTS",
+                "[{}:a]aresample=48000,atrim=start={:.3}:end={:.3},asetpts=PTS-STARTPTS",
                 input_idx, clip.trim_in, end_time
             );
+            
             if fade_in > 0.001 {
                 chain.push_str(&format!(",afade=t=in:st=0:d={:.3}", fade_in));
             }
@@ -269,8 +273,9 @@ pub async fn start_video_export(
         cmd.arg("-map").arg("0:v");
         cmd.arg("-map").arg("[a]");
         
-        // Configure AAC audio codec
+        // Configure AAC audio codec with explicit sample rate for consistency
         cmd.arg("-c:a").arg("aac");
+        cmd.arg("-ar").arg("48000"); // FIX (FINDING-018): Lock output sample rate
         cmd.arg("-b:a").arg("128k");
     } else {
         // Map only the video stream from input 0
