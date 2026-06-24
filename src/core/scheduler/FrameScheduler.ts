@@ -37,6 +37,9 @@ export interface FrameJob {
   /** Unique job ID */
   id: string;
 
+  /** Project ID - for validating job belongs to current project (FIX-004) */
+  projectId: string;
+
   /** Frame request */
   request: FrameRequest;
 
@@ -182,8 +185,22 @@ export class FrameScheduler {
    * @returns Job ID
    */
   schedule(request: FrameRequest): string {
+    // ✅ FIX-004: Capture project ID from active session to validate job belongs to current project
+    // We'll get it from the global if available, otherwise use "unknown"
+    let projectId = "unknown";
+    try {
+      // Access via global window object to avoid import issues
+      const activeSession = (globalThis as any).__activeProjectSession;
+      if (activeSession?.projectId) {
+        projectId = activeSession.projectId;
+      }
+    } catch {
+      // If we can't get session, use "unknown" - job will be rejected on completion
+    }
+
     const job: FrameJob = {
       id: `job-${this.nextJobId++}`,
+      projectId, // ✅ FIX-004: Store project ID with job
       request,
       status: "pending",
       progress: 0,
@@ -261,7 +278,26 @@ export class FrameScheduler {
         }
 
         if (job.status === "complete" && job.result) {
-          resolve(job.result);
+          // ✅ FIX-004: Validate job belongs to current project before resolving
+          // This prevents stale frames from previous project being displayed
+          import("../runtime/ProjectSession")
+            .then(({ getActiveSessionOrNull }) => {
+              const session = getActiveSessionOrNull();
+              const currentProjectId = session?.projectId ?? "unknown";
+              
+              if (currentProjectId !== job.projectId) {
+                // Project switched - discard stale result
+                if (this.config.debug) {
+                  console.log(`[Scheduler] Discarding stale job ${jobId} from project ${job.projectId} (current: ${currentProjectId})`);
+                }
+                reject(new Error("Job result discarded - project switched"));
+                return;
+              }
+              resolve(job.result!);
+            })
+            .catch((error) => {
+              reject(error);
+            });
         } else if (job.status === "cancelled") {
           if (timerId !== null) clearTimeout(timerId);
           reject(new Error("Job cancelled"));
