@@ -211,6 +211,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   createProject: async (name, aspectRatio, frameRate) => {
     console.log("🆕 [PROJECT STORE] Creating new project:", name);
 
+    // Dispose any existing session BEFORE resetting singletons (BUG-007 fix)
+    try {
+      const { disposeActiveSession } = await import("@/core/runtime/ProjectSession");
+      await disposeActiveSession();
+    } catch (err) {
+      console.error("❌ [PROJECT STORE] Session disposal failed:", err);
+    }
+
     // Reset all state from any previous project BEFORE creating new one
     try {
       const { resetAllProjectState } = await import("@/core/runtime/ProjectStateReset");
@@ -524,6 +532,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     // ═══════════════════════════════════════════════════════════════════════════════
     // PHASE 3: Clear ProjectStore State
     // ═══════════════════════════════════════════════════════════════════════════════
+    const closedProjectId = get().project?.id;
     set({ project: null, mediaAssets: [] });
     console.log("  ✅ ProjectStore cleared");
 
@@ -531,21 +540,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     // PHASE 4: Reset Timeline State
     // ═══════════════════════════════════════════════════════════════════════════════
     // Let timelineStore clear its own state
-    import("./timelineStore")
-      .then(({ useTimelineStore }) => {
-        useTimelineStore.getState().hydrateFromProject({ tracks: [], clips: [], transitions: [], gaps: [] });
-        console.log("  ✅ TimelineStore reset");
-      })
-      .catch((err) => {
-        console.error("  ❌ TimelineStore reset failed:", err);
-      });
+    try {
+      const { useTimelineStore } = await import("./timelineStore");
+      useTimelineStore.getState().hydrateFromProject({ tracks: [], clips: [], transitions: [], gaps: [] });
+      console.log("  ✅ TimelineStore reset");
+    } catch (err) {
+      console.error("  ❌ TimelineStore reset failed:", err);
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════════
     // PHASE 5: Clear Crash-Recovery Snapshot
     // ═══════════════════════════════════════════════════════════════════════════════
     // On a clean close, remove the IndexedDB snapshot so we don't prompt for
     // recovery the next time the user opens the application.
-    lifecycleMonitor.record("PROJECT_DISPOSE", { projectId: get().project?.id });
+    lifecycleMonitor.record("PROJECT_DISPOSE", { projectId: closedProjectId });
     clearSnapshot().catch((err) => {
       console.warn("[PROJECT STORE] Failed to clear crash-recovery snapshot:", err);
     });
