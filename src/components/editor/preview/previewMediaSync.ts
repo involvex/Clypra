@@ -11,10 +11,12 @@ const clipFilterCache = new Map<string, Clip[]>();
 const MAX_CACHE_SIZE = 100; // Limit cache growth (100 entries = ~1.67 seconds at 60fps)
 
 export function getPreviewMediaSyncClips(clips: Clip[], time: number): Clip[] {
-  // Cache key: time rounded to 0.1s precision + clip count
-  // Time precision avoids per-frame cache misses (6 frames at 60fps share same key)
-  // Clip count invalidates cache when timeline structure changes
-  const cacheKey = `${time.toFixed(1)}-${clips.length}`;
+  // PREV-BUG-006 fix: Cache key includes clip identity (first+last IDs) alongside count.
+  // Using only clips.length caused collisions when clips were replaced with same-count arrays.
+  // First+last IDs provide O(1) identity without hashing every clip.
+  const firstId = clips.length > 0 ? clips[0].id : "";
+  const lastId = clips.length > 1 ? clips[clips.length - 1].id : "";
+  const cacheKey = `${time.toFixed(1)}-${clips.length}-${firstId}-${lastId}`;
 
   // Check cache first (hot path - saves ~0.5-1ms per frame × 60fps)
   if (clipFilterCache.has(cacheKey)) {

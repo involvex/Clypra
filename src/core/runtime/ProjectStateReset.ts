@@ -274,6 +274,42 @@ export async function resetAllProjectState(options: ResetOptions = {}): Promise<
   }
 
   // ═══════════════════════════════════════════════════════════════════════════════
+  // PHASE 5c: Clear Evaluation Cache (PREV-BUG-002 fix)
+  // The EvaluationCache is a module-level singleton that caches EvaluatedScene
+  // objects. If not cleared on project switch, stale scenes from Project A can
+  // be served for Project B when cache keys collide (same epoch + time + hash).
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  try {
+    const { clearEvaluationCache } = await import("../evaluation/evaluator");
+    clearEvaluationCache();
+
+    resetSubsystems.push("EvaluationCache");
+    console.log("  ✅ EvaluationCache cleared (prevents cross-project scene contamination)");
+  } catch (error) {
+    errors.push({ subsystem: "EvaluationCache", error: error as Error });
+    console.error("  ❌ EvaluationCache clear failed:", error);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // PHASE 5d: Clear Lottie Render Cache (PREV-BUG-003 fix)
+  // The lottieRenderCache holds Lottie animation instances with hidden DOM
+  // containers appended to document.body. Without clearing, they leak across
+  // projects and can display wrong sticker content if clipIds collide.
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  try {
+    const { clearLottieRenderCache } = await import("../render/rasterizer");
+    clearLottieRenderCache();
+
+    resetSubsystems.push("LottieRenderCache");
+    console.log("  ✅ LottieRenderCache cleared (DOM nodes released)");
+  } catch (error) {
+    errors.push({ subsystem: "LottieRenderCache", error: error as Error });
+    console.error("  ❌ LottieRenderCache clear failed:", error);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════════
   // PHASE 6: Flush GPU Texture Cache (FINDING-009 / CONTAMINATION-004)
   // ═══════════════════════════════════════════════════════════════════════════════
 

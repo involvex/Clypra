@@ -28,6 +28,7 @@ import { useStickersStore } from "../../features/stickers/store/stickersStore";
 import { segmentBodyMask } from "../../features/body-effects/segmentation/bodySegmentationWorkerClient";
 import { sampleCanvasAlpha, textRenderTrace, textRenderWarn } from "@/lib/debug/textRenderTrace";
 import { performanceMonitor } from "@/lib/monitoring/PerformanceMonitor";
+import { TransitionRenderer } from "@clypra/engine/transitions";
 
 interface LottieAnimationCacheEntry {
   anim: any;
@@ -38,6 +39,22 @@ interface LottieAnimationCacheEntry {
 }
 
 const lottieRenderCache = new Map<string, LottieAnimationCacheEntry>();
+
+/**
+ * PREV-BUG-003 fix: Clear all cached Lottie animations and remove their DOM containers.
+ * Must be called on project switch to prevent DOM node leaks and stale animation data.
+ */
+export function clearLottieRenderCache(): void {
+  for (const [, entry] of lottieRenderCache) {
+    try {
+      entry.anim.destroy();
+    } catch {
+      // Lottie destroy can throw if already cleaned up
+    }
+    entry.container.remove();
+  }
+  lottieRenderCache.clear();
+}
 
 function hasVisibleAlpha(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, width: number, height: number): boolean | null {
   try {
@@ -100,6 +117,10 @@ export interface RasterTarget {
 
   /** Whether to skip applying track-level filters on the CPU (for GPU preview path) */
   skipFilters?: boolean;
+
+  /** PREV-BUG-005 fix: Resource handle side-channel map (layerId → handle).
+   *  Used instead of mutating cached EvaluatedScene layer objects. */
+  resourceHandleMap?: Map<string, import("../resources/types").RenderResourceHandle>;
 }
 
 /**
@@ -232,17 +253,9 @@ export async function rasterizeScene(scene: EvaluatedScene, target: RasterTarget
     const outgoing = scene.visualLayers.find((l) => l.layerId === t.outgoingLayer);
     const incoming = scene.visualLayers.find((l) => l.layerId === t.incomingLayer);
     if (outgoing && incoming) {
-      // Create offscreen canvases at full raster resolution
-      const fromCanvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(width, height) : document.createElement("canvas");
-      const toCanvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(width, height) : document.createElement("canvas");
-      if (fromCanvas instanceof HTMLCanvasElement) {
-        fromCanvas.width = width;
-        fromCanvas.height = height;
-      }
-      if (toCanvas instanceof HTMLCanvasElement) {
-        toCanvas.width = width;
-        toCanvas.height = height;
-      }
+      // PREV-BUG-004 fix: Use CanvasDevice pool instead of raw OffscreenCanvas to avoid GC pressure.
+      const fromCanvas = CanvasDevice.acquire(width, height);
+      const toCanvas = CanvasDevice.acquire(width, height);
       const fromCtx = fromCanvas.getContext("2d") as any;
       const toCtx = toCanvas.getContext("2d") as any;
 
@@ -292,12 +305,12 @@ export async function rasterizeScene(scene: EvaluatedScene, target: RasterTarget
         // Since the frames are already rendered with offsetX/offsetY, reset transform to draw them full-screen
         ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-        // Import TransitionRenderer from @clypra/engine (single source of truth)
-        const { TransitionRenderer } = await import("@clypra/engine/transitions");
-
-        // Render transition with params
+        // PREV-BUG-007 fix: TransitionRenderer is now a static import (no async import() in hot path)
         TransitionRenderer.render(ctx as any, frames.fromCanvas as any, frames.toCanvas as any, tInfo.transition.type, tInfo.transition.params || {}, tInfo.transition.progress);
         ctx.restore();
+        // PREV-BUG-004 fix: Release transition canvases back to pool
+        CanvasDevice.release(frames.fromCanvas);
+        CanvasDevice.release(frames.toCanvas);
         performanceMonitor.endTimer(`rasterizer.layer_${layer.layerType}`);
       } else {
         // Fallback to normal rendering if frames failed to prepare
@@ -540,16 +553,19 @@ async function rasterizeMediaLayer(ctx: CanvasRenderingContext2D | OffscreenCanv
     let imageBitmap: ImageBitmap | null = null;
 
     // 2. Try to use pre-resolved resource
-    if (layer.resourceHandle) {
+    // PREV-BUG-005 fix: Check the side-channel map first (avoids reliance on mutated scene cache),
+    // then fall back to layer.resourceHandle for backward compatibility (export path).
+    const resolvedHandle = target.resourceHandleMap?.get(layer.layerId) ?? layer.resourceHandle;
+    if (resolvedHandle) {
       const resourceCache = getResourceCache();
-      const resource = resourceCache.get(layer.resourceHandle);
+      const resource = resourceCache.get(resolvedHandle);
 
       if (resource && resource.data instanceof ImageBitmap) {
         performanceMonitor.increment("rasterizer.resource_cache_hit");
         imageBitmap = resource.data;
       } else {
         performanceMonitor.increment("rasterizer.resource_cache_miss");
-        console.warn(`[Rasterizer] Resource handle ${layer.resourceHandle} not found or not ImageBitmap`);
+        console.warn(`[Rasterizer] Resource handle ${resolvedHandle} not found or not ImageBitmap`);
       }
     } else if (layer.mediaType === "image") {
       console.warn(`[Rasterizer] No resourceHandle for image clip ${layer.clipId}, falling back to fetch`);
@@ -579,7 +595,7 @@ async function rasterizeMediaLayer(ctx: CanvasRenderingContext2D | OffscreenCanv
     await drawMediaWithSourceRotation(ctx, imageBitmap, width, height, layer.sourceRotation, layer.effects, layer.filter);
 
     // Only close if we created it (not from resource manager)
-    if (!layer.resourceHandle && imageBitmap) {
+    if (!resolvedHandle && imageBitmap) {
       imageBitmap.close();
     }
 

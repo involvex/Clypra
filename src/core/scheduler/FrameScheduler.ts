@@ -76,6 +76,10 @@ export interface FrameJob {
 
   /** Resource handles acquired during preload (for release after rasterization) */
   acquiredResourceHandles: RenderResourceHandle[];
+
+  /** PREV-BUG-005 fix: Resource handle side-channel map (layerId → handle).
+   *  Passed to rasterizer instead of mutating cached scene objects. */
+  resourceHandleMap: Map<string, RenderResourceHandle>;
 }
 
 /**
@@ -209,6 +213,7 @@ export class FrameScheduler {
       createdAt: Date.now(),
       metrics: {},
       acquiredResourceHandles: [],
+      resourceHandleMap: new Map(),
     };
 
     this.jobs.set(job.id, job);
@@ -507,6 +512,8 @@ export class FrameScheduler {
         colorSpace: job.request.colorSpace,
         videoElements: job.request.videoElements,
         skipFilters: job.request.skipFilters,
+        // PREV-BUG-005 fix: Pass resource handles as side-channel instead of mutating cached scene
+        resourceHandleMap: job.resourceHandleMap,
       });
 
       job.metrics.rasterTimeMs = Date.now() - rasterStartTime;
@@ -796,17 +803,11 @@ export class FrameScheduler {
     // Wait for all resources to load
     await Promise.all(loadPromises);
 
-    // ✅ FIX: Attach resource handles to the layers
-    for (const layer of scene.visualLayers) {
-      if (layer.layerType === "media") {
-        const handle = layerResourceHandles.get(layer.layerId);
-        if (handle) {
-          // Mutate the layer to add the resource handle
-          (layer as any).resourceHandle = handle;
-        } else if (layer.mediaType === "image") {
-          console.warn(`[FrameScheduler] No handle found for image layer ${layer.clipId} at ${layer.sourcePath}`);
-        }
-      }
+    // ✅ PREV-BUG-005 fix: Store resource handles on the job's side-channel map
+    // instead of mutating the cached scene object. This prevents dangling handles
+    // on scenes that remain in the EvaluationCache after job cancellation.
+    for (const [layerId, handle] of layerResourceHandles.entries()) {
+      job.resourceHandleMap.set(layerId, handle);
     }
   }
 
