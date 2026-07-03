@@ -15,6 +15,12 @@ export interface AudioDevice {
   label: string;
 }
 
+/**
+ * Callback fired when recording is stopped externally (e.g. user clicks
+ * OS "Stop Sharing", or a MediaRecorder error occurs).
+ */
+export type RecordingStoppedCallback = (reason: "track_ended" | "recorder_error", error?: string) => void;
+
 export class DualRecordService {
   private static instance: DualRecordService | null = null;
 
@@ -30,6 +36,9 @@ export class DualRecordService {
 
   private isRecordingActive = false;
   private isPreviewActive = false;
+
+  /** Callback for external stop events (track ended, recorder error) */
+  private onRecordingStopped: RecordingStoppedCallback | null = null;
 
   // Microphone testing
   private micTestStream: MediaStream | null = null;
@@ -257,9 +266,23 @@ export class DualRecordService {
 
   /**
    * Start recording. Records screen and camera to separate files.
+   *
+   * @param options        Recording source options
+   * @param onStopped      Optional callback fired if recording stops externally
+   *                        (e.g. user clicks OS "Stop Sharing", or MediaRecorder error)
    */
-  async startRecording(options: DualRecordOptions): Promise<void> {
+  async startRecording(
+    options: DualRecordOptions,
+    onStopped?: RecordingStoppedCallback
+  ): Promise<void> {
     if (this.isRecordingActive) throw new Error("Recording already in progress");
+
+    // Validate: at least one source must be enabled
+    if (!options.screen && !options.webcam && !options.audio) {
+      throw new Error("At least one recording source must be enabled (screen, webcam, or audio)");
+    }
+
+    this.onRecordingStopped = onStopped ?? null;
 
     this.stopMicTest();
     this.stopWebcamStream(); // Stop webcam preview to get a fresh recording stream
@@ -297,6 +320,20 @@ export class DualRecordService {
           video: videoConstraints,
           audio: false,
         });
+
+        // Listen for the OS "Stop Sharing" event on the screen video track.
+        // When the user clicks "Stop Sharing" in the system UI, the track fires
+        // `ended` but our MediaRecorder keeps running — producing empty frames.
+        // We catch this and auto-stop the entire recording session.
+        const screenVideoTrack = this.screenStream.getVideoTracks()[0];
+        if (screenVideoTrack) {
+          screenVideoTrack.addEventListener("ended", () => {
+            console.warn("[DualRecordService] Screen track ended externally (user stopped sharing)");
+            if (this.isRecordingActive) {
+              this.onRecordingStopped?.("track_ended", "Screen sharing was stopped");
+            }
+          });
+        }
       }
 
       if (this.screenStream && options.screen) {
@@ -306,6 +343,12 @@ export class DualRecordService {
         );
         this.screenRecorder.ondataavailable = (e) => {
           if (e.data && e.data.size > 0) this.screenChunks.push(e.data);
+        };
+        this.screenRecorder.onerror = (e) => {
+          console.error("[DualRecordService] Screen MediaRecorder error:", e);
+          if (this.isRecordingActive) {
+            this.onRecordingStopped?.("recorder_error", "Screen recorder encountered an error");
+          }
         };
         this.screenRecorder.start(250);
       }
@@ -332,6 +375,12 @@ export class DualRecordService {
         this.webcamRecorder.ondataavailable = (e) => {
           if (e.data && e.data.size > 0) this.webcamChunks.push(e.data);
         };
+        this.webcamRecorder.onerror = (e) => {
+          console.error("[DualRecordService] Webcam MediaRecorder error:", e);
+          if (this.isRecordingActive) {
+            this.onRecordingStopped?.("recorder_error", "Camera recorder encountered an error");
+          }
+        };
         this.webcamRecorder.start(250);
       }
 
@@ -349,12 +398,16 @@ export class DualRecordService {
     }
 
     try {
-      const stopRecorder = (recorder: MediaRecorder | null): Promise<Blob | null> => {
+      // Pass the chunks array explicitly to avoid fragile identity comparison
+      // with `this.screenRecorder` which could be nulled by a concurrent cleanup.
+      const stopRecorder = (
+        recorder: MediaRecorder | null,
+        chunks: Blob[]
+      ): Promise<Blob | null> => {
         if (!recorder || recorder.state === "inactive") return Promise.resolve(null);
         return new Promise((resolve) => {
           recorder.onstop = () => {
             const mimeType = recorder.mimeType || "video/webm";
-            const chunks = recorder === this.screenRecorder ? this.screenChunks : this.webcamChunks;
             const blob = new Blob(chunks, { type: mimeType });
             resolve(blob);
           };
@@ -363,8 +416,8 @@ export class DualRecordService {
       };
 
       const [screenBlob, webcamBlob] = await Promise.all([
-        stopRecorder(this.screenRecorder),
-        stopRecorder(this.webcamRecorder),
+        stopRecorder(this.screenRecorder, this.screenChunks),
+        stopRecorder(this.webcamRecorder, this.webcamChunks),
       ]);
 
       const timestamp = Date.now();
@@ -406,6 +459,7 @@ export class DualRecordService {
   cleanup(): void {
     this.isRecordingActive = false;
     this.isPreviewActive = false;
+    this.onRecordingStopped = null;
 
     this.stopMicTest();
 
@@ -417,6 +471,9 @@ export class DualRecordService {
 
     this.screenRecorder = null;
     this.webcamRecorder = null;
+    // Release recorded blob data to free memory
+    this.screenChunks = [];
+    this.webcamChunks = [];
   }
 
 }
