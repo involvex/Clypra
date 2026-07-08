@@ -3041,9 +3041,9 @@ describe("PreviewMediaPool — FINDING-022: Conditional Property Updates", () =>
     const videoElements = pool.getVideoElements();
     const elements = Array.from(videoElements.values());
 
-    // One element should be unmuted (primary), others muted
+    // Both active visible video elements should be unmuted
     const unmutedCount = elements.filter((e) => !e.muted).length;
-    expect(unmutedCount).toBeLessThanOrEqual(1); // At most one unmuted
+    expect(unmutedCount).toBe(2);
 
     // Sync again - muted states should remain correct
     pool.sync(clips, assets, tracks, {
@@ -3056,7 +3056,7 @@ describe("PreviewMediaPool — FINDING-022: Conditional Property Updates", () =>
     });
 
     const unmutedCountAfter = elements.filter((e) => !e.muted).length;
-    expect(unmutedCountAfter).toBeLessThanOrEqual(1);
+    expect(unmutedCountAfter).toBe(2);
   });
 });
 
