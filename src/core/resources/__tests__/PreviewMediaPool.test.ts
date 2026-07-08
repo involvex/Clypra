@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { PreviewMediaPool } from "../PreviewMediaPool";
 import type { Clip, MediaAsset } from "@/types";
+import { useTimelineStore } from "../../../store/timelineStore";
 
 // Mock Tauri API
 vi.mock("@tauri-apps/api/core", () => ({
@@ -4388,5 +4389,88 @@ describe("PreviewMediaPool — FINDING-008: Memory-Aware Adaptive Eviction", () 
 
     // Estimated memory should be reasonable (under 1GB with safety margin)
     expect(estimatedMemoryMB).toBeLessThanOrEqual(1000);
+  });
+
+  it("does not pause transition-active video elements when outside normal bounds (Scenario C)", () => {
+    // Left clip ends at 5.0. Right starts at 5.0.
+    const leftClip = createMockClip("left-clip", "media-1", 0, 5, 0);
+    const rightClip = createMockClip("right-clip", "media-2", 5, 5, 0);
+    const assets = [
+      createMockAsset("media-1", "/path/to/video1.mp4"),
+      createMockAsset("media-2", "/path/to/video2.mp4"),
+    ];
+    const tracks = [{ id: "track-1", type: "video" }];
+
+    // Trigger sync at time = 5.2.
+    // At 5.2, left-clip is outside its normal bounds (0 to 5.0).
+    // But there is a transition from left-clip to right-clip from 4.5 to 6.0.
+    const syncState = {
+      time: 5.2,
+      state: "playing" as const,
+      speed: 1.0,
+      muted: false,
+      volume: 100,
+      frameRate: 30 as 24 | 30 | 60,
+    };
+
+    // Mock timelineStore's transitions state so useTimelineStore.getState().transitions returns the active transition.
+    // In PreviewMediaPool.ts, useTimelineStore.getState().transitions is read.
+    const originalTransitions = useTimelineStore.getState().transitions;
+    useTimelineStore.setState({
+      transitions: [
+        {
+          id: "trans-1",
+          type: "cross-dissolve",
+          fromItemId: "left-clip",
+          toItemId: "right-clip",
+          placement: {
+            trackId: "track-1",
+            startTime: 4.5,
+            duration: 1.5,
+          },
+        },
+      ],
+    });
+
+    try {
+      // First sync: creates elements in the cache
+      pool.sync([leftClip, rightClip], assets, tracks, syncState);
+
+      const leftManaged = (pool as any).videoCache.get("left-clip");
+      const rightManaged = (pool as any).videoCache.get("right-clip");
+
+      expect(leftManaged).toBeDefined();
+      expect(rightManaged).toBeDefined();
+
+      // Configure readyState = 4 so requestPlayback proceeds
+      Object.defineProperty(leftManaged.element, "readyState", { get: () => 4, configurable: true });
+      Object.defineProperty(rightManaged.element, "readyState", { get: () => 4, configurable: true });
+
+      // Mock paused property and play/pause methods on leftManaged.element
+      let leftPaused = true;
+      Object.defineProperty(leftManaged.element, "paused", { get: () => leftPaused, configurable: true });
+      leftManaged.element.play = () => {
+        leftPaused = false;
+        return Promise.resolve();
+      };
+      leftManaged.element.pause = () => {
+        leftPaused = true;
+      };
+
+      // Second sync: triggers playback now that elements are ready.
+      // Use time: 5.3 to bypass early-exit optimization (lastSyncHash check).
+      pool.sync([leftClip, rightClip], assets, tracks, {
+        ...syncState,
+        time: 5.3,
+      });
+      
+      // Left clip must be active because of the active transition
+      expect(leftManaged.isActive).toBe(true);
+      // Backing video element for left clip should NOT be paused
+      expect(leftManaged.element.paused).toBe(false);
+    } finally {
+      // Revert store state
+      useTimelineStore.setState({ transitions: originalTransitions });
+    }
   });
 });
