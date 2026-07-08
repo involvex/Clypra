@@ -91,6 +91,9 @@ export class PixiSceneCompositor {
           if (mediaLayer.mediaType === "video") {
             const key = `${mediaLayer.clipId}-${mediaLayer.mediaId}`;
             sourceElement = videoElements.get(key);
+            if (!sourceElement && import.meta.env.DEV) {
+              console.warn(`[Clypra Compositor] Active video clip "${mediaLayer.clipId}" has no backing video element (key: ${key}). It will not be rendered.`);
+            }
           } else {
             const resolvedHandle = resourceHandleMap?.get(mediaLayer.layerId) ?? mediaLayer.resourceHandle;
             if (resolvedHandle) {
