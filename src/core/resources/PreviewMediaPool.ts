@@ -224,6 +224,10 @@ export class PreviewMediaPool {
   // Lookahead prewarming for split clip transitions
   private readonly LOOKAHEAD_WINDOW_SECONDS = 1.5;
 
+  // Drift/seek tolerances and readyState thresholds
+  private readonly DRIFT_TOLERANCE_PAUSED_S = 0.01; // Tight tolerance for frame-stepping / paused scrubbing
+  private readonly DRIFT_TOLERANCE_PLAYING_ACTIVE_S = 2.0; // Large tolerance for active playhead when buffering to prevent infinite seek loops
+
   // ─── RE-ENTRANCY PROTECTION ─────────────────────────────────────────────
   private _syncInProgress = false;
   private _queuedSyncRequest: {
@@ -1095,9 +1099,9 @@ export class PreviewMediaPool {
 
     if (sourceTime === null) {
       const prewarmSourceTime = getClipPrewarmSourceTime(clip, syncState.time);
-      if (prewarmSourceTime !== null) {
+      if (prewarmSourceTime !== null && video.readyState >= 1) {
         const clampedPrewarmTime = Number.isFinite(video.duration) && video.duration > 0 ? Math.max(0, Math.min(prewarmSourceTime, video.duration - 0.001)) : prewarmSourceTime;
-        if (Math.abs(video.currentTime - clampedPrewarmTime) > 0.01) {
+        if (Math.abs(video.currentTime - clampedPrewarmTime) > this.DRIFT_TOLERANCE_PAUSED_S) {
           video.currentTime = clampedPrewarmTime;
         }
       }
@@ -1152,8 +1156,20 @@ export class PreviewMediaPool {
       }
     } else {
       const drift = Math.abs(video.currentTime - clampedTime);
-      if (drift > 0.01) {
-        video.currentTime = clampedTime;
+      if (drift > this.DRIFT_TOLERANCE_PAUSED_S) {
+        const isWaitingToPlay = syncState.state === "playing" && video.readyState < 3;
+        if (isWaitingToPlay) {
+          // During active playback, if an element is paused (e.g. buffering/loading or waiting for play promise),
+          // only allow major seeks (drift > 2.0s) to prevent infinite seeking loops.
+          if (drift > this.DRIFT_TOLERANCE_PLAYING_ACTIVE_S && video.readyState >= 1) {
+            video.currentTime = clampedTime;
+          }
+        } else {
+          // App is paused/stopped - normal frame seeking (requires readyState >= 1 to seek)
+          if (video.readyState >= 1) {
+            video.currentTime = clampedTime;
+          }
+        }
       }
     }
 
@@ -1740,7 +1756,22 @@ export class PreviewMediaPool {
         audio.currentTime = clampedTime;
       }
     } else {
-      audio.currentTime = clampedTime;
+      const drift = Math.abs(audio.currentTime - clampedTime);
+      if (drift > this.DRIFT_TOLERANCE_PAUSED_S) {
+        const isWaitingToPlay = syncState.state === "playing" && audio.readyState < 3;
+        if (isWaitingToPlay) {
+          // During active playback, if audio is paused (buffering/starting),
+          // only allow major seeks (drift > 2.0s) to prevent infinite seeking loops.
+          if (drift > this.DRIFT_TOLERANCE_PLAYING_ACTIVE_S && audio.readyState >= 1) {
+            audio.currentTime = clampedTime;
+          }
+        } else {
+          // App is paused/stopped - normal frame seeking (requires readyState >= 1 to seek)
+          if (audio.readyState >= 1) {
+            audio.currentTime = clampedTime;
+          }
+        }
+      }
     }
 
     if (syncState.state === "playing") {
