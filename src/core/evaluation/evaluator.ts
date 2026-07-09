@@ -223,6 +223,7 @@ export function evaluateTimelineScene(time: number, clips: Clip[], tracks: Track
       role: clip.role,
       clipKind: clip.kind,
       zIndex: i,
+      trackIndex: clip.trackIndex, // ADDED: Include track index for compositor debugging
       layerType: "media",
       mediaId: clip.mediaId,
       mediaType: asset.type === "video" ? "video" : "image",

@@ -101,6 +101,9 @@ export interface EvaluatedMediaLayer extends BaseVisualLayer {
   /** Source file path (Tauri-converted URL) */
   readonly sourcePath: string;
 
+  /** Track index (for compositor debugging and z-order verification) */
+  readonly trackIndex?: number;
+
   /** Render resource handle (for pre-resolved resources) */
   readonly resourceHandle?: RenderResourceHandle;
 

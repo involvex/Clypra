@@ -1,17 +1,4 @@
-import {
-  getSharedPixiRenderer,
-  getOrCreateMediaSprite,
-  applyMediaTransform,
-  releaseMediaSprite,
-  applyBodyEffectMask,
-  createGPUBodyOutlineFilter,
-  createGPUBodyGlowFilter,
-  createGPUBodyParticlesFilter,
-  getActiveMediaSpriteKeys,
-  getMediaSpriteRecord,
-  clearAllMediaSprites,
-  ALL_TRANSITIONS,
-} from "@clypra/engine";
+import { getSharedPixiRenderer, getOrCreateMediaSprite, applyMediaTransform, releaseMediaSprite, applyBodyEffectMask, createGPUBodyOutlineFilter, createGPUBodyGlowFilter, createGPUBodyParticlesFilter, getActiveMediaSpriteKeys, getMediaSpriteRecord, clearAllMediaSprites, ALL_TRANSITIONS } from "@clypra/engine";
 import { renderTextLayerBridged, beginTextFrame, endTextFrame } from "./textBridge.js";
 import { renderStickerLayerBridged, beginStickerFrame, endStickerFrame } from "./stickerBridge.js";
 import { getResourceCache } from "../resources/ResourceCache.js";
@@ -61,13 +48,7 @@ export class PixiSceneCompositor {
     this.renderer = getSharedPixiRenderer(canvas, width, height);
   }
 
-  async composeFrame(
-    scene: EvaluatedScene,
-    viewport: { scale: number; offsetX: number; offsetY: number; pixelRatio: number; projectWidth?: number; projectHeight?: number },
-    videoElements: Map<string, HTMLVideoElement>,
-    resourceHandleMap?: Map<string, any>,
-    bodyMasks: Map<string, any> = new Map(),
-  ): Promise<void> {
+  async composeFrame(scene: EvaluatedScene, viewport: { scale: number; offsetX: number; offsetY: number; pixelRatio: number; projectWidth?: number; projectHeight?: number }, videoElements: Map<string, HTMLVideoElement>, resourceHandleMap?: Map<string, any>, bodyMasks: Map<string, any> = new Map()): Promise<void> {
     if (!this.renderer.isReady) {
       return;
     }
@@ -113,7 +94,6 @@ export class PixiSceneCompositor {
     const backingH = Math.round(projectH * viewport.scale);
     const app = this.renderer.getApp();
     if (app && (app.screen.width !== backingW || app.screen.height !== backingH)) {
-      console.log(`[PixiSceneCompositor] Resizing renderer: ${app.screen.width}x${app.screen.height} -> ${backingW}x${backingH}`);
       this.renderer.resize(backingW, backingH);
     }
 
@@ -140,30 +120,49 @@ export class PixiSceneCompositor {
 
     const sortedLayers = [...scene.visualLayers];
 
+    // ─── Canonical Visual Stacking Contract ───────────────────────────────────
+    // This defines the SINGLE SOURCE OF TRUTH for layer ordering across all renderers:
+    // - Pixi preview (this compositor)
+    // - Legacy canvas fallback
+    // - Export rendering
+    // - Thumbnail generation
+    //
+    // Contract:
+    // 1. Lower trackIndex (top in timeline UI) renders LAST → appears ON TOP
+    // 2. Within same track, renderOrder (evaluator array index) determines order
+    // 3. z-index formula: (maxTrackIndex - trackIndex) * SPACING + renderOrder
+    //
+    // This ensures:
+    // - Track 0 (timeline top) always occludes all other tracks
+    // - Overlapping clips on same track follow evaluator sort order
+    // - No z-index collisions even with many tracks or clips
+    // ──────────────────────────────────────────────────────────────────────────
+
+    // Compute max trackIndex from active visual media layers for robust z-index mapping
+    const visualMediaLayers = sortedLayers.filter((layer) => layer.layerType === "media" && (layer.mediaType === "video" || layer.mediaType === "image")) as EvaluatedMediaLayer[];
+
+    const visualTrackIndices = [...new Set(visualMediaLayers.map((layer) => layer.trackIndex ?? 0))].sort((a, b) => a - b);
+    const maxTrackIndex = visualTrackIndices.length > 0 ? visualTrackIndices[visualTrackIndices.length - 1] : 0;
+
     for (let index = 0; index < sortedLayers.length; index++) {
       const layer = sortedLayers[index];
       const renderOrder = index;
 
       if (layer.layerType === "media") {
         const mediaLayer = layer as EvaluatedMediaLayer;
-        
+
         if (isTransitionActive && transitionLayerIds.has(mediaLayer.layerId)) {
           continue;
         }
 
         if (mediaLayer.clipKind === "sticker") {
-          await renderStickerLayerBridged(
-            mediaLayer,
-            frameId,
-            baseMediaContainer,
-            viewport,
-            renderOrder
-          );
+          await renderStickerLayerBridged(mediaLayer, frameId, baseMediaContainer, viewport, renderOrder);
         } else {
           let sourceElement: any = null;
           if (mediaLayer.mediaType === "video") {
             const key = `${mediaLayer.clipId}-${mediaLayer.mediaId}`;
             sourceElement = videoElements.get(key);
+
             if (!sourceElement && import.meta.env.DEV) {
               console.warn(`[Clypra Compositor] Active video clip "${mediaLayer.clipId}" has no backing video element (key: ${key}). It will not be rendered.`);
             }
@@ -179,12 +178,19 @@ export class PixiSceneCompositor {
 
           if (sourceElement) {
             const record = getOrCreateMediaSprite(mediaLayer.clipId, mediaLayer.mediaType, sourceElement, baseMediaContainer);
+
+            // Skip this layer if sprite creation was deferred (video metadata not ready yet)
+            if (!record) {
+              continue;
+            }
+
             record.lastSeenFrame = frameId;
             record.sprite.visible = true;
 
             // Update video texture to upload the latest frame to the GPU (critical for stacked tracks/paused states)
             if (mediaLayer.mediaType === "video" && sourceElement instanceof HTMLVideoElement) {
               if (sourceElement.readyState >= 2) {
+                // Force texture update to ensure current video frame is uploaded to GPU
                 record.texture.source.update();
               }
             }
@@ -195,62 +201,52 @@ export class PixiSceneCompositor {
               if (conform && (!conform.sourceWidth || !conform.sourceHeight) && sourceElement.videoWidth && sourceElement.videoHeight) {
                 const w = sourceElement.videoWidth;
                 const h = sourceElement.videoHeight;
-                import("../../store/timelineStore").then(({ useTimelineStore }) => {
-                  const timelineStore = useTimelineStore.getState();
-                  const existingClip = timelineStore.clips.find(c => c.id === mediaLayer.clipId);
-                  if (existingClip) {
-                    const currentConform = existingClip.conform;
-                    if (!currentConform || !currentConform.sourceWidth || !currentConform.sourceHeight) {
-                      timelineStore.updateClip(mediaLayer.clipId, {
-                        conform: {
-                          mode: currentConform?.mode || 'fit',
-                          sourceWidth: w,
-                          sourceHeight: h,
-                          userScale: currentConform?.userScale ?? 1,
-                          userOffsetX: currentConform?.userOffsetX ?? 0,
-                          userOffsetY: currentConform?.userOffsetY ?? 0,
-                        }
-                      });
+                import("../../store/timelineStore")
+                  .then(({ useTimelineStore }) => {
+                    const timelineStore = useTimelineStore.getState();
+                    const existingClip = timelineStore.clips.find((c) => c.id === mediaLayer.clipId);
+                    if (existingClip) {
+                      const currentConform = existingClip.conform;
+                      if (!currentConform || !currentConform.sourceWidth || !currentConform.sourceHeight) {
+                        timelineStore.updateClip(mediaLayer.clipId, {
+                          conform: {
+                            mode: currentConform?.mode || "fit",
+                            sourceWidth: w,
+                            sourceHeight: h,
+                            userScale: currentConform?.userScale ?? 1,
+                            userOffsetX: currentConform?.userOffsetX ?? 0,
+                            userOffsetY: currentConform?.userOffsetY ?? 0,
+                          },
+                        });
+                      }
                     }
-                  }
-                }).catch(err => {
-                  console.error("[PixiSceneCompositor] Failed to update clip conform:", err);
-                });
+                  })
+                  .catch((err) => {
+                    console.error("[PixiSceneCompositor] Failed to update clip conform:", err);
+                  });
               }
             }
 
             applyMediaTransform(record.sprite, mediaLayer, viewport);
 
-            console.log(`[PixiSceneCompositor] Media dimensions:`, {
-              clipId: mediaLayer.clipId,
-              layerW: mediaLayer.width,
-              layerH: mediaLayer.height,
-              viewportScale: viewport.scale,
-              containerScaleX: baseMediaContainer.scale.x,
-              spriteW: record.sprite.width,
-              spriteH: record.sprite.height,
-              spriteScaleX: record.sprite.scale.x,
-              texSourceW: record.sprite.texture.source.width,
-              texW: record.sprite.texture.width,
-              appW: app?.screen.width,
-            });
-
             const width = record.sprite.texture.source.width || mediaLayer.width;
             const height = record.sprite.texture.source.height || mediaLayer.height;
             const filters = getOrUpdateFilters(mediaLayer, width, height, bodyMasks);
             record.sprite.filters = filters.length > 0 ? filters : null;
-            record.sprite.zIndex = renderOrder;
+
+            // CRITICAL: Compute z-index from trackIndex for proper NLE stacking
+            // Timeline convention: lower-numbered tracks are visually higher (top in UI)
+            // Pixi convention: higher zIndex renders later / on top
+            // Therefore: sprite.zIndex = maxTrackIndex - trackIndex
+            // Add renderOrder as tiebreaker for clips on same track (multiplied by large spacing to avoid collisions)
+            const trackIdx = mediaLayer.trackIndex ?? 0;
+            const INTRA_TRACK_SPACING = 1_000_000; // Sufficient spacing for intra-track ordering
+            record.sprite.zIndex = (maxTrackIndex - trackIdx) * INTRA_TRACK_SPACING + renderOrder;
           }
         }
       } else if (layer.layerType === "text") {
         const textLayer = layer as EvaluatedTextLayer;
-        await renderTextLayerBridged(
-          textLayer,
-          frameId,
-          baseMediaContainer,
-          viewport,
-          renderOrder
-        );
+        await renderTextLayerBridged(textLayer, frameId, baseMediaContainer, viewport, renderOrder);
       }
     }
 
@@ -262,21 +258,13 @@ export class PixiSceneCompositor {
     // 2. Reconcile frames
     endTextFrame(frameId, baseMediaContainer);
     endStickerFrame(frameId, baseMediaContainer);
-    
+
     if (isTransitionActive && activeTransition && definition) {
       const outIdx = sortedLayers.findIndex((l) => l.layerId === activeTransition.outgoingLayer);
       const inIdx = sortedLayers.findIndex((l) => l.layerId === activeTransition.incomingLayer);
       const transitionOrder = Math.max(0, outIdx, inIdx);
 
-      await this.composeActiveTransition(
-        activeTransition,
-        definition,
-        scene,
-        baseMediaContainer,
-        transitionOrder,
-        videoElements,
-        resourceHandleMap
-      );
+      await this.composeActiveTransition(activeTransition, definition, scene, baseMediaContainer, transitionOrder, videoElements, resourceHandleMap);
     }
 
     const activeMediaKeys = getActiveMediaSpriteKeys();
@@ -297,15 +285,7 @@ export class PixiSceneCompositor {
     this.renderer.render();
   }
 
-  private async composeActiveTransition(
-    transition: EvaluatedTransition,
-    definition: any,
-    scene: EvaluatedScene,
-    baseMediaContainer: Container,
-    renderOrder: number,
-    videoElements: Map<string, HTMLVideoElement>,
-    resourceHandleMap?: Map<string, any>,
-  ): Promise<void> {
+  private async composeActiveTransition(transition: EvaluatedTransition, definition: any, scene: EvaluatedScene, baseMediaContainer: Container, renderOrder: number, videoElements: Map<string, HTMLVideoElement>, resourceHandleMap?: Map<string, any>): Promise<void> {
     const outgoingLayer = scene.visualLayers.find((l) => l.layerId === transition.outgoingLayer) as EvaluatedMediaLayer;
     const incomingLayer = scene.visualLayers.find((l) => l.layerId === transition.incomingLayer) as EvaluatedMediaLayer;
     if (!outgoingLayer || !incomingLayer) return;
@@ -345,13 +325,7 @@ export class PixiSceneCompositor {
     }
   }
 
-  private renderToOffscreenTexture(
-    slot: "from" | "to",
-    layer: EvaluatedMediaLayer,
-    scene: EvaluatedScene,
-    videoElements: Map<string, HTMLVideoElement>,
-    resourceHandleMap?: Map<string, any>,
-  ): RenderTexture {
+  private renderToOffscreenTexture(slot: "from" | "to", layer: EvaluatedMediaLayer, scene: EvaluatedScene, videoElements: Map<string, HTMLVideoElement>, resourceHandleMap?: Map<string, any>): RenderTexture {
     const app = this.renderer.getApp()!;
     const canvasWidth = scene.metadata.canvasWidth || 1920;
     const canvasHeight = scene.metadata.canvasHeight || 1080;
@@ -421,13 +395,13 @@ export class PixiSceneCompositor {
 
   destroy(): void {
     clearFilterCache();
-    
+
     // Clean up offscreen textures
     for (const texture of this.transitionRenderTextures.values()) {
       texture.destroy(true);
     }
     this.transitionRenderTextures.clear();
-    
+
     for (const container of this.transitionOffscreenContainers.values()) {
       container.destroy({ children: true });
     }

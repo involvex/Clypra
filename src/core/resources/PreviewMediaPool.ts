@@ -1066,6 +1066,8 @@ export class PreviewMediaPool {
   }
 
   private updateVideoElement(managed: ManagedVideo, clip: Clip, syncState: PreviewSyncState, tracks: Array<{ id: string; type: string }>, isPrimaryAudibleVideo: boolean, isTrackMuted: boolean, activeVideoClipCount: number = 1, transitions: any[] = []): void {
+    console.log(`[PreviewMediaPool] updateVideoElement called for clip ${clip.id} at time ${syncState.time.toFixed(3)}`);
+
     const video = managed.element;
     const sourceTime = getClipSourceTime(clip, syncState.time, syncState.frameRate, transitions);
 
