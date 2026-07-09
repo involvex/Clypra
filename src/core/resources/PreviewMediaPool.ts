@@ -1066,8 +1066,6 @@ export class PreviewMediaPool {
   }
 
   private updateVideoElement(managed: ManagedVideo, clip: Clip, syncState: PreviewSyncState, tracks: Array<{ id: string; type: string }>, isPrimaryAudibleVideo: boolean, isTrackMuted: boolean, activeVideoClipCount: number = 1, transitions: any[] = []): void {
-    console.log(`[PreviewMediaPool] updateVideoElement called for clip ${clip.id} at time ${syncState.time.toFixed(3)}`);
-
     const video = managed.element;
     const sourceTime = getClipSourceTime(clip, syncState.time, syncState.frameRate, transitions);
 
@@ -1139,7 +1137,6 @@ export class PreviewMediaPool {
         video.currentTime = clampedTime;
         managed.lastHardSeekAtMs = now - 10000; // Set to 10s ago to allow immediate next seek
       } else if (isUserScrubbing) {
-        console.log(`[PreviewMediaPool] Video user scrubbing seek on clip ${clip.id}. Drift: ${drift.toFixed(3)}s. Seeking video to match: ${clampedTime.toFixed(3)}s`);
         // User scrubbing: immediate seek without rate limiting
         video.currentTime = clampedTime;
         managed.lastHardSeekAtMs = now;

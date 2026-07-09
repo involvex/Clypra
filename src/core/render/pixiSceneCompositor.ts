@@ -1,41 +1,20 @@
-import { getSharedPixiRenderer, getOrCreateMediaSprite, applyMediaTransform, releaseMediaSprite, applyBodyEffectMask, createGPUBodyOutlineFilter, createGPUBodyGlowFilter, createGPUBodyParticlesFilter, getActiveMediaSpriteKeys, getMediaSpriteRecord, clearAllMediaSprites, ALL_TRANSITIONS } from "@clypra/engine";
+import { getSharedPixiRenderer, getOrCreateMediaSprite, applyMediaTransform, clearAllMediaSprites, ALL_TRANSITIONS } from "@clypra/engine";
 import { renderTextLayerBridged, beginTextFrame, endTextFrame } from "./textBridge.js";
 import { renderStickerLayerBridged, beginStickerFrame, endStickerFrame } from "./stickerBridge.js";
-import { getResourceCache } from "../resources/ResourceCache.js";
-import type { EvaluatedScene, EvaluatedVisualLayer, EvaluatedMediaLayer, EvaluatedTextLayer, EvaluatedTransition } from "../evaluation/types.js";
-import { Container, RenderTexture, Sprite, Filter } from "pixi.js";
-import { getOrUpdateFilters, releaseFilterCache, clearFilterCache } from "./filterCache.js";
+import type { EvaluatedScene, EvaluatedMediaLayer, EvaluatedTextLayer, EvaluatedTransition } from "../evaluation/types.js";
+import { Container, RenderTexture } from "pixi.js";
+import { clearFilterCache } from "./filterCache.js";
 
-const RENDERER_TO_GPU_TRANSITION: Record<string, { id: string; params?: Record<string, any> }> = {
-  fade: { id: "cross-dissolve" },
-  dissolve: { id: "cross-dissolve" },
-  cut: { id: "strobe-cut" },
-  slide_left: { id: "push", params: { direction: "left" } },
-  slide_right: { id: "push", params: { direction: "right" } },
-  slide_up: { id: "push", params: { direction: "up" } },
-  slide_down: { id: "push", params: { direction: "down" } },
-  wipe_left: { id: "push", params: { direction: "left" } },
-  wipe_right: { id: "push", params: { direction: "right" } },
-  wipe_up: { id: "push", params: { direction: "up" } },
-  wipe_down: { id: "push", params: { direction: "down" } },
-  wipe_clockwise: { id: "iris-reveal" },
-  wipe_center: { id: "iris-reveal" },
-  zoom_in: { id: "zoom", params: { direction: "in", scale: 1.3 } },
-  zoom_out: { id: "zoom", params: { direction: "out", scale: 0.7 } },
-  zoom_blur: { id: "zoom", params: { direction: "in", scale: 1.3, blurAmount: 12 } },
-  circle_expand: { id: "iris-reveal", params: { type: "circle" } },
-  circle_collapse: { id: "iris-reveal", params: { type: "circle", invert: true } },
-  diamond_expand: { id: "iris-reveal", params: { type: "diamond" } },
-  rectangle_expand: { id: "iris-reveal", params: { type: "rectangle" } },
-  blur_fade: { id: "cross-dissolve" },
-  directional_blur: { id: "cross-dissolve" },
-  glitch: { id: "glitch" },
-  rgb_split: { id: "chromatic-push" },
-  chromatic: { id: "chromatic-push" },
-  film_burn: { id: "film-burn-wipe" },
-  light_leak: { id: "light-leak-sweep" },
-  whip_pan: { id: "push" },
-};
+// Utility imports
+import { extractVisualMediaLayers, calculateMaxTrackIndex, calculateLayerZIndex } from "./utils/zIndexCalculator.js";
+import { resolveMediaSource } from "./utils/mediaResolver.js";
+import { createTextureUpdateStrategy, type TextureUpdateStrategy } from "./utils/textureUpdater.js";
+import { resolveTransitionDefinition, mergeTransitionParams } from "./utils/transitionResolver.js";
+
+// Service and manager imports
+import { ConformCaptureService } from "./services/ConformCaptureService.js";
+import { FilterManager } from "./managers/FilterManager.js";
+import { SpriteLifecycleManager } from "./managers/SpriteLifecycleManager.js";
 
 export class PixiSceneCompositor {
   private renderer: any;
@@ -44,8 +23,20 @@ export class PixiSceneCompositor {
   private transitionOffscreenContainers = new Map<"from" | "to", Container>();
   private hadActiveTransition = false;
 
+  // Services and managers for code organization
+  private textureUpdater: TextureUpdateStrategy;
+  private conformCapture: ConformCaptureService;
+  private filterManager: FilterManager;
+  private spriteLifecycle: SpriteLifecycleManager;
+
   constructor(canvas: HTMLCanvasElement, width: number, height: number) {
     this.renderer = getSharedPixiRenderer(canvas, width, height);
+
+    // Initialize services and managers
+    this.textureUpdater = createTextureUpdateStrategy("eager");
+    this.conformCapture = new ConformCaptureService();
+    this.filterManager = new FilterManager();
+    this.spriteLifecycle = new SpriteLifecycleManager();
   }
 
   async composeFrame(scene: EvaluatedScene, viewport: { scale: number; offsetX: number; offsetY: number; pixelRatio: number; projectWidth?: number; projectHeight?: number }, videoElements: Map<string, HTMLVideoElement>, resourceHandleMap?: Map<string, any>, bodyMasks: Map<string, any> = new Map()): Promise<void> {
@@ -59,15 +50,10 @@ export class PixiSceneCompositor {
     let definition: any = null;
 
     if (activeTransition) {
-      definition = ALL_TRANSITIONS.find((t) => t.id === activeTransition.type);
-      if (!definition) {
-        const mapping = RENDERER_TO_GPU_TRANSITION[activeTransition.type];
-        if (mapping) {
-          definition = ALL_TRANSITIONS.find((t) => t.id === mapping.id);
-        }
-      }
+      const resolved = resolveTransitionDefinition(activeTransition.type, ALL_TRANSITIONS);
 
-      if (definition) {
+      if (resolved) {
+        definition = resolved.definition;
         isTransitionActive = true;
         transitionLayerIds = new Set([activeTransition.outgoingLayer, activeTransition.incomingLayer]);
       } else {
@@ -139,10 +125,8 @@ export class PixiSceneCompositor {
     // ──────────────────────────────────────────────────────────────────────────
 
     // Compute max trackIndex from active visual media layers for robust z-index mapping
-    const visualMediaLayers = sortedLayers.filter((layer) => layer.layerType === "media" && (layer.mediaType === "video" || layer.mediaType === "image")) as EvaluatedMediaLayer[];
-
-    const visualTrackIndices = [...new Set(visualMediaLayers.map((layer) => layer.trackIndex ?? 0))].sort((a, b) => a - b);
-    const maxTrackIndex = visualTrackIndices.length > 0 ? visualTrackIndices[visualTrackIndices.length - 1] : 0;
+    const visualMediaLayers = extractVisualMediaLayers(sortedLayers);
+    const maxTrackIndex = calculateMaxTrackIndex(visualMediaLayers);
 
     for (let index = 0; index < sortedLayers.length; index++) {
       const layer = sortedLayers[index];
@@ -158,22 +142,12 @@ export class PixiSceneCompositor {
         if (mediaLayer.clipKind === "sticker") {
           await renderStickerLayerBridged(mediaLayer, frameId, baseMediaContainer, viewport, renderOrder);
         } else {
-          let sourceElement: any = null;
-          if (mediaLayer.mediaType === "video") {
-            const key = `${mediaLayer.clipId}-${mediaLayer.mediaId}`;
-            sourceElement = videoElements.get(key);
+          // Use media resolver to get video element or image resource
+          const sourceElement = resolveMediaSource(mediaLayer, videoElements, resourceHandleMap);
 
-            if (!sourceElement && import.meta.env.DEV) {
-              console.warn(`[Clypra Compositor] Active video clip "${mediaLayer.clipId}" has no backing video element (key: ${key}). It will not be rendered.`);
-            }
-          } else {
-            const resolvedHandle = resourceHandleMap?.get(mediaLayer.layerId) ?? mediaLayer.resourceHandle;
-            if (resolvedHandle) {
-              const resource = getResourceCache().get(resolvedHandle);
-              if (resource && resource.data instanceof ImageBitmap) {
-                sourceElement = resource.data;
-              }
-            }
+          if (!sourceElement && mediaLayer.mediaType === "video" && import.meta.env.DEV) {
+            const key = `${mediaLayer.clipId}-${mediaLayer.mediaId}`;
+            console.warn(`[Clypra Compositor] Active video clip "${mediaLayer.clipId}" has no backing video element (key: ${key}). It will not be rendered.`);
           }
 
           if (sourceElement) {
@@ -187,61 +161,27 @@ export class PixiSceneCompositor {
             record.lastSeenFrame = frameId;
             record.sprite.visible = true;
 
-            // Update video texture to upload the latest frame to the GPU (critical for stacked tracks/paused states)
+            // Update video texture using texture updater strategy
             if (mediaLayer.mediaType === "video" && sourceElement instanceof HTMLVideoElement) {
-              if (sourceElement.readyState >= 2) {
-                // Force texture update to ensure current video frame is uploaded to GPU
-                record.texture.source.update();
+              if (this.textureUpdater.shouldUpdate(mediaLayer.clipId, sourceElement, false)) {
+                this.textureUpdater.update(mediaLayer.clipId, record.texture, sourceElement);
               }
             }
 
-            // Capture video source dimensions if not already stored
-            if (mediaLayer.mediaType === "video" && sourceElement instanceof HTMLVideoElement) {
-              const conform = mediaLayer.conform;
-              if (conform && (!conform.sourceWidth || !conform.sourceHeight) && sourceElement.videoWidth && sourceElement.videoHeight) {
-                const w = sourceElement.videoWidth;
-                const h = sourceElement.videoHeight;
-                import("../../store/timelineStore")
-                  .then(({ useTimelineStore }) => {
-                    const timelineStore = useTimelineStore.getState();
-                    const existingClip = timelineStore.clips.find((c) => c.id === mediaLayer.clipId);
-                    if (existingClip) {
-                      const currentConform = existingClip.conform;
-                      if (!currentConform || !currentConform.sourceWidth || !currentConform.sourceHeight) {
-                        timelineStore.updateClip(mediaLayer.clipId, {
-                          conform: {
-                            mode: currentConform?.mode || "fit",
-                            sourceWidth: w,
-                            sourceHeight: h,
-                            userScale: currentConform?.userScale ?? 1,
-                            userOffsetX: currentConform?.userOffsetX ?? 0,
-                            userOffsetY: currentConform?.userOffsetY ?? 0,
-                          },
-                        });
-                      }
-                    }
-                  })
-                  .catch((err) => {
-                    console.error("[PixiSceneCompositor] Failed to update clip conform:", err);
-                  });
-              }
+            // Capture video source dimensions using conform capture service
+            if (mediaLayer.mediaType === "video" && sourceElement instanceof HTMLVideoElement && mediaLayer.conform) {
+              this.conformCapture.captureVideoDimensions(mediaLayer.clipId, sourceElement, mediaLayer.conform);
             }
 
             applyMediaTransform(record.sprite, mediaLayer, viewport);
 
-            const width = record.sprite.texture.source.width || mediaLayer.width;
-            const height = record.sprite.texture.source.height || mediaLayer.height;
-            const filters = getOrUpdateFilters(mediaLayer, width, height, bodyMasks);
-            record.sprite.filters = filters.length > 0 ? filters : null;
+            // Apply filters using filter manager
+            this.filterManager.applyFilters(record.sprite, mediaLayer, bodyMasks);
 
             // CRITICAL: Compute z-index from trackIndex for proper NLE stacking
-            // Timeline convention: lower-numbered tracks are visually higher (top in UI)
-            // Pixi convention: higher zIndex renders later / on top
-            // Therefore: sprite.zIndex = maxTrackIndex - trackIndex
-            // Add renderOrder as tiebreaker for clips on same track (multiplied by large spacing to avoid collisions)
+            // Use utility function for consistent z-index calculation across codebase
             const trackIdx = mediaLayer.trackIndex ?? 0;
-            const INTRA_TRACK_SPACING = 1_000_000; // Sufficient spacing for intra-track ordering
-            record.sprite.zIndex = (maxTrackIndex - trackIdx) * INTRA_TRACK_SPACING + renderOrder;
+            record.sprite.zIndex = calculateLayerZIndex(trackIdx, maxTrackIndex, renderOrder);
           }
         }
       } else if (layer.layerType === "text") {
@@ -267,19 +207,8 @@ export class PixiSceneCompositor {
       await this.composeActiveTransition(activeTransition, definition, scene, baseMediaContainer, transitionOrder, videoElements, resourceHandleMap);
     }
 
-    const activeMediaKeys = getActiveMediaSpriteKeys();
-    for (const clipId of activeMediaKeys) {
-      const record = getMediaSpriteRecord(clipId);
-      if (record) {
-        if (record.lastSeenFrame !== frameId) {
-          record.sprite.visible = false;
-        }
-        if (frameId - record.lastSeenFrame > 180) {
-          releaseMediaSprite(clipId, baseMediaContainer);
-          releaseFilterCache(clipId);
-        }
-      }
-    }
+    // Use sprite lifecycle manager to reconcile sprite states
+    this.spriteLifecycle.reconcileSprites(frameId, baseMediaContainer);
 
     // 3. Render stage
     this.renderer.render();
@@ -296,12 +225,8 @@ export class PixiSceneCompositor {
     const fromTex = this.renderToOffscreenTexture("from", outgoingLayer, scene, videoElements, resourceHandleMap);
     const toTex = this.renderToOffscreenTexture("to", incomingLayer, scene, videoElements, resourceHandleMap);
 
-    const mapping = RENDERER_TO_GPU_TRANSITION[transition.type];
-    const defaultParams = mapping?.params || {};
-    const transitionParams = {
-      ...defaultParams,
-      ...(transition.params || {}),
-    };
+    // Merge transition parameters using utility function
+    const transitionParams = mergeTransitionParams({}, {}, transition.params || {});
 
     const activeId = this.renderer.getActiveTransitionId();
     if (activeId !== definition.id) {
@@ -343,28 +268,17 @@ export class PixiSceneCompositor {
       this.transitionOffscreenContainers.set(slot, container);
     }
 
-    let sourceElement: any = null;
-    if (layer.mediaType === "video") {
-      const key = `${layer.clipId}-${layer.mediaId}`;
-      sourceElement = videoElements.get(key);
-    } else {
-      const resolvedHandle = resourceHandleMap?.get(layer.layerId) ?? layer.resourceHandle;
-      if (resolvedHandle) {
-        const resource = getResourceCache().get(resolvedHandle);
-        if (resource && resource.data instanceof ImageBitmap) {
-          sourceElement = resource.data;
-        }
-      }
-    }
+    // Use media resolver to get source element
+    const sourceElement = resolveMediaSource(layer, videoElements, resourceHandleMap);
 
     if (sourceElement) {
       const record = getOrCreateMediaSprite(layer.clipId, layer.mediaType, sourceElement, container);
       record.lastSeenFrame = this.currentFrameId;
 
-      // Update video texture to upload the latest frame to the GPU during transitions
+      // Update video texture using texture updater strategy
       if (layer.mediaType === "video" && sourceElement instanceof HTMLVideoElement) {
-        if (sourceElement.readyState >= 2) {
-          record.texture.source.update();
+        if (this.textureUpdater.shouldUpdate(layer.clipId, sourceElement, false)) {
+          this.textureUpdater.update(layer.clipId, record.texture, sourceElement);
         }
       }
 
@@ -380,10 +294,9 @@ export class PixiSceneCompositor {
 
       applyMediaTransform(record.sprite, layersCopy, internalViewport);
 
-      const width = record.sprite.texture.source.width || layer.width;
-      const height = record.sprite.texture.source.height || layer.height;
-      const filters = getOrUpdateFilters(layersCopy, width, height, new Map());
-      record.sprite.filters = filters.length > 0 ? filters : null;
+      // Apply filters using filter manager
+      this.filterManager.applyFilters(record.sprite, layersCopy, new Map());
+
       record.sprite.visible = true;
       record.sprite.zIndex = 0;
 
