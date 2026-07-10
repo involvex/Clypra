@@ -116,7 +116,11 @@ export class PixiSceneCompositor {
     let definition: any = null;
 
     if (activeTransition) {
-      const resolved = resolveTransitionDefinition(activeTransition.type, ALL_TRANSITIONS);
+      const resolved = resolveTransitionDefinition(
+        activeTransition.type,
+        ALL_TRANSITIONS,
+        activeTransition.renderer, // Pass renderer from API transition if available
+      );
 
       if (resolved) {
         definition = resolved.definition;

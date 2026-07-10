@@ -83,7 +83,7 @@ interface TimelineStore {
   addTransition: (transition: TransitionTimelineItem) => void;
   removeTransition: (transitionId: string) => void;
   updateTransition: (transitionId: string, updates: Partial<TransitionTimelineItem>) => void;
-  createTransitionBetweenClips: (fromClipId: string, toClipId: string, type: TransitionType, duration?: number) => { transition?: TransitionTimelineItem; error: string | null };
+  createTransitionBetweenClips: (fromClipId: string, toClipId: string, type: TransitionType, duration?: number, renderer?: string) => { transition?: TransitionTimelineItem; error: string | null };
   moveClip: (clipId: string, startTime: number) => void;
   setZoom: (level: number) => void;
   /** Clamps to the SRP zoom range and syncs `zoomLevel` to `pixelsPerSecond / 100`. */
@@ -601,7 +601,7 @@ export const useTimelineStore = create<TimelineStore>(
       });
     },
 
-    createTransitionBetweenClips: (fromClipId, toClipId, type, duration = 0.5) => {
+    createTransitionBetweenClips: (fromClipId, toClipId, type, duration = 0.5, renderer) => {
       const state = get();
       const fromClip = state.clips.find((clip) => clip.id === fromClipId);
       const toClip = state.clips.find((clip) => clip.id === toClipId);
@@ -624,6 +624,7 @@ export const useTimelineStore = create<TimelineStore>(
         id: generateId("transition"),
         kind: "transition",
         type,
+        renderer, // Store renderer ID from API transition
         fromItemId: left.id,
         toItemId: right.id,
         alignment: "center",
