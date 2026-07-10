@@ -2,7 +2,7 @@
  * Transition Resolver
  *
  * Resolves transition types to GPU transition definitions,
- * handling legacy mappings and parameter merging.
+ * handling API transitions, legacy mappings, and parameter merging.
  */
 
 const RENDERER_TO_GPU_TRANSITION: Record<string, { id: string; params?: Record<string, any> }> = {
@@ -39,24 +39,33 @@ const RENDERER_TO_GPU_TRANSITION: Record<string, { id: string; params?: Record<s
 /**
  * Resolve transition type to GPU transition definition.
  *
- * Handles:
- * - Direct matches (transition type maps directly to GPU definition ID)
- * - Legacy mappings (old renderer types map to new GPU types)
- * - Parameter merging (default params from mapping + runtime params)
+ * Resolution priority:
+ * 1. Direct match with GPU definition ID (e.g., "cross-dissolve", "push", "glitch")
+ * 2. API transition renderer field (for custom published transitions)
+ * 3. Legacy mapping (old renderer types like "fade" → "cross-dissolve")
  *
- * @param transitionType - Transition type string
+ * @param transitionType - Transition type string (ID or renderer)
  * @param ALL_TRANSITIONS - Array of available GPU transition definitions
+ * @param rendererOverride - Optional renderer ID from API TransitionAsset
  * @returns Transition definition with merged parameters, or null if not found
  */
-export function resolveTransitionDefinition(transitionType: string, ALL_TRANSITIONS: any[]): { definition: any; params: Record<string, any> } | null {
-  // Direct match: transition type is a GPU definition ID
+export function resolveTransitionDefinition(transitionType: string, ALL_TRANSITIONS: any[], rendererOverride?: string): { definition: any; params: Record<string, any> } | null {
+  // Priority 1: Use renderer override from API (if provided)
+  if (rendererOverride) {
+    const definition = ALL_TRANSITIONS.find((t) => t.id === rendererOverride);
+    if (definition) {
+      return { definition, params: {} };
+    }
+  }
+
+  // Priority 2: Direct match - transition type is a GPU definition ID
   let definition = ALL_TRANSITIONS.find((t) => t.id === transitionType);
 
   if (definition) {
     return { definition, params: {} };
   }
 
-  // Legacy mapping: transition type needs conversion
+  // Priority 3: Legacy mapping - transition type needs conversion
   const mapping = RENDERER_TO_GPU_TRANSITION[transitionType];
 
   if (mapping) {
@@ -72,7 +81,7 @@ export function resolveTransitionDefinition(transitionType: string, ALL_TRANSITI
 
   // Not found
   if (import.meta.env.DEV) {
-    console.warn(`[TransitionResolver] Unknown transition type: ${transitionType}`);
+    console.warn(`[TransitionResolver] Unknown transition type: ${transitionType}, renderer: ${rendererOverride || "none"}`);
   }
 
   return null;

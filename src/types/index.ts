@@ -439,6 +439,8 @@ export type TransitionEasing = import("@clypra-studio/engine").EasingFunction;
 export interface TransitionTimelineItem extends BaseTimelineItem {
   kind: "transition";
   type: TransitionType;
+  /** Renderer ID for GPU transition (e.g., "cross-dissolve", "push", "glitch") - used to resolve GPU implementation */
+  renderer?: string;
   fromItemId: string;
   toItemId: string;
   alignment: TransitionAlignment;
