@@ -30,6 +30,7 @@ import { MAX_PROJECT_NAME_LENGTH } from "@/types";
 import { ProgressRing } from "./ProgressRing";
 import { SuccessCheck } from "./SuccessCheck";
 import { ExportPresetCard, ExportPreset, PresetConfig } from "./ExportPresetCard";
+import { QUALITY_TIERS, resolveExportDimensions } from "@/lib/export/exportDimensions";
 
 // Lazy load video export functionality (code splitting)
 const exportVideoModule = () => import("@/lib/export/videoExport");
@@ -142,6 +143,16 @@ const PRESET_CONFIGS: Record<ExportPreset, PresetConfig> = {
 
 const PRESET_ORDER: ExportPreset[] = ["720p-fast", "1080p-fast", "1080p-quality", "4k-quality", "prores-422hq"];
 
+function getQualityTierForPreset(presetKey: ExportPreset) {
+  if (presetKey.startsWith("720p")) {
+    return QUALITY_TIERS[0]; // 720p
+  }
+  if (presetKey.startsWith("1080p") || presetKey.startsWith("prores")) {
+    return QUALITY_TIERS[1]; // 1080p
+  }
+  return QUALITY_TIERS[2]; // 4k
+}
+
 // ─── Detail Row ──────────────────────────────────────────────────────────
 
 function DetailRow({ label, value, icon: Icon }: { label: string; value: string; icon?: React.FC<{ className?: string }> }) {
@@ -186,6 +197,12 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({ isOpen, onClose }) =
   const exportAbortRef = useRef(false);
 
   const selectedPreset = PRESET_CONFIGS[preset];
+
+  // Dynamically resolve export dimensions using project aspect ratio and quality tier
+  const projectW = project?.canvasWidth || 1920;
+  const projectH = project?.canvasHeight || 1080;
+  const qualityTier = getQualityTierForPreset(preset);
+  const { width: resolvedWidth, height: resolvedHeight } = resolveExportDimensions(projectW, projectH, qualityTier);
 
   // ─── Reset state on open ───────────────────────────────────────────
   useEffect(() => {
@@ -326,8 +343,8 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({ isOpen, onClose }) =
         startTime: 0,
         endTime: sequenceDuration,
         outputPath,
-        width: selectedPreset.width,
-        height: selectedPreset.height,
+        width: resolvedWidth,
+        height: resolvedHeight,
         // FIX (BUG-5): Explicitly pass frameRate from project settings
         // so the user knows exactly what fps the export uses
         frameRate: project.frameRate,
@@ -405,9 +422,24 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({ isOpen, onClose }) =
         <div className="w-full md:w-[200px] shrink-0 border-b md:border-b-0 md:border-r border-white/6 p-3 flex flex-row md:flex-col gap-2 overflow-x-auto scrollbar-none items-center md:items-stretch">
           <div className="text-[10px] font-semibold uppercase tracking-wider text-text-muted px-0.5 hidden md:block">Export Preset</div>
 
-          {PRESET_ORDER.map((key) => (
-            <ExportPresetCard key={key} presetKey={key} config={PRESET_CONFIGS[key]} selected={preset === key} disabled={phase === "exporting"} onSelect={() => setPreset(key)} />
-          ))}
+          {PRESET_ORDER.map((key) => {
+            const tier = getQualityTierForPreset(key);
+            const resolved = resolveExportDimensions(projectW, projectH, tier);
+            const dynamicConfig = {
+              ...PRESET_CONFIGS[key],
+              resolution: `${resolved.width}×${resolved.height}`,
+            };
+            return (
+              <ExportPresetCard
+                key={key}
+                presetKey={key}
+                config={dynamicConfig}
+                selected={preset === key}
+                disabled={phase === "exporting"}
+                onSelect={() => setPreset(key)}
+              />
+            );
+          })}
 
           {/* FFmpeg status — bottom of sidebar */}
           <div className="hidden md:block mt-auto pt-3 border-t border-white/6">
@@ -501,7 +533,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({ isOpen, onClose }) =
                 <section>
                   <h3 className="text-[10px] font-semibold uppercase tracking-wider text-text-muted mb-2.5">Export Settings</h3>
                   <div className="rounded-lg border border-white/6 bg-white/2 p-3 space-y-0.5">
-                    <DetailRow label="Resolution" value={selectedPreset.resolution} icon={Monitor} />
+                    <DetailRow label="Resolution" value={`${resolvedWidth}×${resolvedHeight}`} icon={Monitor} />
                     <DetailRow label="Codec" value={selectedPreset.codecLabel} />
                     <DetailRow label="Quality" value={`CRF ${selectedPreset.crf} / ${selectedPreset.preset}`} />
                     <DetailRow label="Pixel Format" value={selectedPreset.pixelFormat} />

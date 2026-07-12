@@ -136,13 +136,13 @@ export class VideoElementPool {
         // Position fixed and practically invisible, but NOT offscreen or hidden.
         // Browsers suspend or throttle decoding for offscreen/hidden/1x1 elements.
         video.style.position = "fixed";
-        video.style.top = "0px";
-        video.style.left = "0px";
-        video.style.width = "256px";
-        video.style.height = "256px";
-        video.style.opacity = "0.001";
+        video.style.bottom = "0px";
+        video.style.right = "0px";
+        video.style.width = "32px";
+        video.style.height = "32px";
+        video.style.opacity = "0.01"; // WebKit suspends decoding for opacity < 0.01
         video.style.pointerEvents = "none";
-        video.style.zIndex = "-9999";
+        video.style.zIndex = "100000"; // Keep on top of all UI (including modals) to prevent WebKit occlusion suspension
 
         // Ensure playsinline is set for Safari/mobile webviews
         video.setAttribute("playsinline", "");
@@ -235,11 +235,28 @@ export class VideoElementPool {
             // On M1/VideoToolbox there is a GPU upload step after this.
             // requestVideoFrameCallback() is the only reliable signal that
             // pixel data is actually ready for ctx.drawImage().
+            // WebKit (Safari/Tauri macOS) suspends compositor updates when elements
+            // are covered (e.g. by export modal) or backgrounded, which prevents
+            // requestVideoFrameCallback and requestAnimationFrame from ever firing.
+            // We set a 100ms fallback so we don't hang in these power-saving states.
+            let callbackTriggered = false;
+
+            const localSettle = () => {
+              if (callbackTriggered) return;
+              callbackTriggered = true;
+              clearTimeout(fallbackTimeout);
+              settle();
+            };
+
+            const fallbackTimeout = setTimeout(() => {
+              localSettle();
+            }, 100);
+
             if (typeof (video as any).requestVideoFrameCallback === "function") {
-              (video as any).requestVideoFrameCallback(settle);
+              (video as any).requestVideoFrameCallback(localSettle);
             } else {
               // Fallback for older browsers: two rAF ticks gives GPU time to upload
-              requestAnimationFrame(() => requestAnimationFrame(settle));
+              requestAnimationFrame(() => requestAnimationFrame(localSettle));
             }
           };
 
