@@ -815,11 +815,8 @@ pub async fn get_decoder(path: &str) -> Result<Arc<Mutex<VideoDecoder>>, String>
     let decoder = VideoDecoder::open(path)
         .map_err(|e| format!("Failed to open {}: {}", path, e))?;
 
-    let creation_time_ms = start.elapsed().as_millis();
-    
-    // MONITORING: Track decoder creation time
     #[cfg(debug_assertions)]
-    eprintln!("[METRIC] decoder_pool.creation_time_ms={} path={}", creation_time_ms, path);
+    eprintln!("[METRIC] decoder_pool.creation_time_ms={} path={}", start.elapsed().as_millis(), path);
 
     let arc = Arc::new(Mutex::new(decoder));
     let entry = DecoderEntry {
