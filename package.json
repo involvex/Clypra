@@ -31,7 +31,11 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "mobile:sync": "npm run build && npx cap sync",
-    "mobile:live": "CAPACITOR_LIVE_RELOAD=true npx cap sync"
+    "mobile:live": "CAPACITOR_LIVE_RELOAD=true npx cap sync",
+    "mobile:dev": "node scripts/mobile-dev.js",
+    "mobile:dev:live": "node scripts/mobile-dev.js --live",
+    "mobile:logs": "node scripts/mobile-logs.js",
+    "mobile:run": "bunx cap run android"
   },
   "dependencies": {
     "@capacitor/core": "^8.4.2",
